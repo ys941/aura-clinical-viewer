@@ -80,8 +80,8 @@ async function openai(study: any, userText: string, images: string[]) {
   if (!endpoint) {
     return NextResponse.json({ connected: false, study, message: "No endpoint configured. Set MEDGEMMA_ENDPOINT (OpenAI-compatible) in .env.local, or use AI_PROVIDER=gemini." });
   }
-  // Free CPU is slow — cap images so the request doesn't time out.
-  const capped = images.slice(0, 2);
+  // Cap images so requests stay responsive (GPU Colab handles ~4 easily).
+  const capped = images.slice(0, 4);
   const content: any[] = [{ type: "text", text: userText }];
   for (const u of capped) content.push({ type: "image_url", image_url: { url: u } });
   const headers: Record<string, string> = { "Content-Type": "application/json" };

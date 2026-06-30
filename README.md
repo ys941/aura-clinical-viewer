@@ -81,7 +81,8 @@ GEMINI_MODEL=gemini-2.5-flash   # or gemma-3-27b-it, gemma-4-26b-it, …
 | Provider | Setup | Notes |
 |---|---|---|
 | **Gemini / Gemma** (Google AI Studio) | free API key | Fast, hosted, vision-capable, generous free tier. General-purpose. |
-| **MedGemma** (self-hosted) | free HF CPU Space (see [`hf-space/`](hf-space/)) | Real medical-tuned model via llama.cpp; free but slow on CPU. |
+| **MedGemma on Colab** (free GPU) | run [`colab/`](colab/) notebook | Real medical model on a free T4 GPU; fast. URL changes per session. |
+| **MedGemma on HF Space** (free CPU) | deploy [`hf-space/`](hf-space/) | Always-on but slow on CPU. |
 
 The AI route ([`app/api/analyze/route.ts`](app/api/analyze/route.ts)) is provider-agnostic — switch by editing `.env.local`.
 
