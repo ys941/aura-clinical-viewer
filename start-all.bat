@@ -26,9 +26,9 @@ echo The AI endpoint auto-syncs to the app (no copy/paste, no .env
 echo editing). Then just click the "AI" button in the Viewer.
 echo.
 
-REM 1) Open the MedGemma Colab notebook (first time: Colab asks to
-REM    authorize GitHub for this private repo - a one-time click).
-start "" "https://colab.research.google.com/github/ys941/aura-clinical-viewer/blob/main/colab/medgemma_aura_colab.ipynb"
+REM 1) Open the MedGemma Colab notebook via gist (opens instantly,
+REM    no GitHub / private-repo authorization prompt).
+start "" "https://colab.research.google.com/gist/ys941/5d09f9d6abd2e8422baa7a072cd061b6/medgemma_aura_colab.ipynb"
 
 REM 2) Install app dependencies on first run
 if not exist "node_modules" (
