@@ -9,6 +9,7 @@ import {
   Command,
   X,
 } from "lucide-react";
+import { MedGemmaHealth } from "@/components/MedGemmaHealth";
 
 export function Topbar() {
   const [showNotif, setShowNotif] = useState(false);
@@ -32,6 +33,9 @@ export function Topbar() {
       </div>
 
       <div className="ml-auto flex items-center gap-1.5">
+        {/* MedGemma health */}
+        <MedGemmaHealth />
+
         {/* AI Activity */}
         <div className="relative">
           <button

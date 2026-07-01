@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveEndpoint } from "@/lib/medgemma";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -46,34 +47,6 @@ export async function POST(req: Request) {
 function dataUrlParts(u: string) {
   const m = u.match(/^data:([^;]+);base64,(.*)$/);
   return m ? { mime: m[1], data: m[2] } : null;
-}
-
-// Resolve the MedGemma endpoint. Prefer an explicit MEDGEMMA_ENDPOINT; otherwise
-// auto-discover the latest URL the Colab notebook published to a free ntfy.sh topic
-// (so the per-session Colab URL updates automatically — no .env edits needed).
-let epCache = { url: "", at: 0 };
-async function resolveEndpoint(): Promise<string> {
-  const direct = process.env.MEDGEMMA_ENDPOINT?.trim();
-  if (direct) return direct;
-  const topic = process.env.MEDGEMMA_NTFY_TOPIC?.trim();
-  if (!topic) return "";
-  if (epCache.url && Date.now() - epCache.at < 15_000) return epCache.url;
-  try {
-    const r = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}/json?poll=1&since=12h`, {
-      signal: AbortSignal.timeout(8000),
-    });
-    const txt = await r.text();
-    let url = "";
-    for (const line of txt.trim().split("\n")) {
-      try {
-        const o = JSON.parse(line);
-        const msg = (o?.message || "").trim();
-        if (o?.event === "message" && /^https?:\/\/\S+\/v1\/chat\/completions$/.test(msg)) url = msg;
-      } catch {}
-    }
-    if (url) { epCache = { url, at: Date.now() }; return url; }
-  } catch {}
-  return epCache.url || "";
 }
 
 async function gemini(study: any, userText: string, images: string[]) {
