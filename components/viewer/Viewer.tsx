@@ -76,6 +76,7 @@ export default function Viewer() {
   const [playing, setPlaying] = useState(false);
   const [fps, setFps] = useState(15);
   const [ai, setAi] = useState<AiState>({ loading: false });
+  const [aiProgress, setAiProgress] = useState<{ done: number; total: number; phase: string } | null>(null);
   const [showAiResult, setShowAiResult] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [reportFindings, setReportFindings] = useState("");
@@ -392,42 +393,72 @@ export default function Viewer() {
     } catch (e: any) { setError(`Export failed: ${e?.message || e}`); try { api.cornerstone.disable(off); } catch {} off.remove(); setExporting(null); }
   }
 
-  // Render evenly-sampled slices of the active series (incl. current) to base64 — what the AI actually sees.
-  async function collectStudyImages(maxN = 6): Promise<string[]> {
-    const api = apiRef.current, main = elRef.current; if (!api || !activeSeries) return [];
-    const ids = activeSeries.imageIds, n = ids.length;
-    const picks = new Set<number>([Math.min(index, n - 1)]);
-    const stepN = Math.max(1, Math.floor(n / maxN));
-    for (let i = 0; i < n && picks.size < maxN; i += stepN) picks.add(i);
-    const sorted = Array.from(picks).sort((a, b) => a - b).slice(0, maxN);
-    const off = document.createElement("div"); off.style.cssText = "position:fixed;left:-10000px;top:0;width:448px;height:448px;"; document.body.appendChild(off);
-    const out: string[] = [];
+  // Cover the WHOLE study by sampling slices across ALL series and tiling them into a few
+  // montage grids. This lets one request (few images = few tokens) "see" the entire study.
+  async function buildStudyMontages(maxTiles = 36, cols = 4, rows = 4, tile = 256): Promise<string[]> {
+    const api = apiRef.current, main = elRef.current;
+    if (!api || !study) return [];
+    const ids = study.imageIds, n = ids.length; // all series, flattened
+    const count = Math.min(maxTiles, n);
+    const picks: number[] = [];
+    for (let k = 0; k < count; k++) picks.push(Math.floor(((k + 0.5) * n) / count));
+    const uniq = Array.from(new Set(picks));
+    const perMontage = cols * rows;
+
+    const off = document.createElement("div");
+    off.style.cssText = `position:fixed;left:-10000px;top:0;width:${tile}px;height:${tile}px;`;
+    document.body.appendChild(off);
+    const montages: string[] = [];
     try {
       api.cornerstone.enable(off);
       const mainVp = main ? api.cornerstone.getViewport(main) : null;
-      for (const i of sorted) {
-        const img = await api.cornerstone.loadAndCacheImage(ids[i]);
+      let mCanvas: HTMLCanvasElement | null = null, mCtx: CanvasRenderingContext2D | null = null, tileIdx = 0;
+      const startMontage = () => {
+        mCanvas = document.createElement("canvas");
+        mCanvas.width = cols * tile; mCanvas.height = rows * tile;
+        mCtx = mCanvas.getContext("2d")!;
+        mCtx.fillStyle = "#000"; mCtx.fillRect(0, 0, mCanvas.width, mCanvas.height);
+        tileIdx = 0;
+      };
+      startMontage();
+      setAiProgress({ done: 0, total: uniq.length, phase: "Rendering slices" });
+      for (let s = 0; s < uniq.length; s++) {
+        const img = await api.cornerstone.loadAndCacheImage(ids[uniq[s]]);
         api.cornerstone.displayImage(off, img);
         if (mainVp) { const vp = api.cornerstone.getViewport(off); vp.voi = { ...mainVp.voi }; vp.invert = mainVp.invert; api.cornerstone.setViewport(off, vp); }
         try { api.cornerstone.fitToWindow(off); } catch {}
         api.cornerstone.updateImage(off);
         await new Promise((r) => requestAnimationFrame(() => r(null)));
         const c = off.querySelector("canvas") as HTMLCanvasElement;
-        out.push(c.toDataURL("image/jpeg", 0.85));
+        const cx = (tileIdx % cols) * tile, cy = Math.floor(tileIdx / cols) * tile;
+        mCtx!.drawImage(c, cx, cy, tile, tile);
+        // small index label per tile
+        mCtx!.fillStyle = "rgba(0,0,0,0.55)"; mCtx!.fillRect(cx, cy, 34, 16);
+        mCtx!.fillStyle = "#7ce0ff"; mCtx!.font = "11px monospace"; mCtx!.fillText(String(uniq[s] + 1), cx + 3, cy + 12);
+        tileIdx++;
+        setAiProgress({ done: s + 1, total: uniq.length, phase: "Rendering slices" });
+        if (tileIdx === perMontage || s === uniq.length - 1) { montages.push(mCanvas!.toDataURL("image/jpeg", 0.8)); if (s !== uniq.length - 1) startMontage(); }
       }
-    } catch {} finally { try { api.cornerstone.disable(off); } catch {} off.remove(); }
-    return out;
+    } catch (e) { console.warn("montage error", e); }
+    finally { try { api.cornerstone.disable(off); } catch {} off.remove(); }
+    return montages;
   }
 
   async function runAi() {
-    if (!study) return; setAi({ loading: true });
+    if (!study) return;
+    setAi({ loading: true }); setAiProgress({ done: 0, total: 1, phase: "Preparing" });
     try {
-      const images = await collectStudyImages(6);
-      const res = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: study.name, modality: study.modality, imageCount: study.imageIds.length, images }) });
+      const images = await buildStudyMontages(36);
+      setAiProgress({ done: 1, total: 1, phase: "Analyzing with MedGemma" });
+      const res = await fetch("/api/analyze", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: study.name, modality: study.modality, imageCount: study.imageIds.length, seriesCount: study.series.length, montages: images.length, images }),
+      });
       const data = await res.json();
+      setAiProgress(null);
       if (data.connected && data.text) { setAi({ loading: false, connected: true, text: data.text }); setShowAiResult(true); toast("AI analysis complete"); }
       else setAi({ loading: false, connected: false, message: data.message || "No response." });
-    } catch (e: any) { setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
+    } catch (e: any) { setAiProgress(null); setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
   }
 
   function openReport(findings = "") { setReportFindings(findings); const canvas = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null; setSnapshot(canvas ? canvas.toDataURL("image/png") : ""); setShowReport(true); }
@@ -545,6 +576,22 @@ export default function Viewer() {
             <AnimatePresence>{ai.message && (
               <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="absolute left-1/2 top-3 max-w-md -translate-x-1/2 rounded-lg border border-teal-500/30 bg-navy-900/90 px-3 py-2 text-xs text-slate-200 backdrop-blur">
                 {ai.message} {ai.connected === false && <Link href="/settings" className="text-teal-300 underline">Connect a model</Link>}
+              </motion.div>
+            )}</AnimatePresence>
+            {/* AI progress */}
+            <AnimatePresence>{ai.loading && aiProgress && (
+              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                className="absolute left-1/2 top-1/2 w-72 -translate-x-1/2 -translate-y-1/2 rounded-xl border border-teal-500/30 bg-navy-900/95 p-4 text-center backdrop-blur">
+                <div className="flex items-center justify-center gap-2 text-sm font-semibold text-white">
+                  <Sparkles className="h-4 w-4 animate-pulse text-teal-300" /> Analyzing whole study
+                </div>
+                <div className="mt-1 text-[11px] text-slate-400">
+                  {aiProgress.phase}{aiProgress.total > 1 ? ` · ${aiProgress.done}/${aiProgress.total} slices` : "…"}
+                </div>
+                <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                  <div className="h-full rounded-full bg-teal-400 transition-all" style={{ width: `${Math.round((aiProgress.done / Math.max(1, aiProgress.total)) * 100)}%` }} />
+                </div>
+                <div className="mt-2 text-[10px] text-slate-500">{study.imageIds.length} images · one request · low tokens</div>
               </motion.div>
             )}</AnimatePresence>
           </div>
@@ -700,20 +747,77 @@ function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", 
   const [impression, setImpression] = useState("");
   function buildHtml() {
     const esc = (s: string) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]!));
+    // minimal markdown → HTML (headings, bullets, bold) for the AI findings
+    const md = (src: string) => {
+      if (!src) return "";
+      const lines = esc(src).split(/\r?\n/);
+      let html = "", inList = false;
+      const closeList = () => { if (inList) { html += "</ul>"; inList = false; } };
+      for (let raw of lines) {
+        const line = raw.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`(.+?)`/g, "<code>$1</code>");
+        const h = line.match(/^\s*(#{1,4})\s+(.*)$/);
+        const li = line.match(/^\s*[-*]\s+(.*)$/);
+        if (h) { closeList(); html += `<h3>${h[2].replace(/[:#]+$/, "")}</h3>`; }
+        else if (li) { if (!inList) { html += "<ul>"; inList = true; } html += `<li>${li[1]}</li>`; }
+        else if (line.trim() === "") { closeList(); }
+        else { closeList(); html += `<p>${line}</p>`; }
+      }
+      closeList();
+      return html;
+    };
     const rows = study.series.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.modality)}</td><td>${s.count}</td></tr>`).join("");
-    const info = ["Patient Name", "Patient ID", "Patient Birth Date", "Patient Sex", "Study Date", "Modality", "Study Description", "Referring Physician"].filter((k) => d[k]).map((k) => `<tr><td>${esc(k)}</td><td>${esc(d[k])}</td></tr>`).join("");
-    const meas = measurements.length ? `<h2>Measurements</h2><ul>${measurements.map((m) => `<li>${esc(m.tool)}: ${esc(m.text)}</li>`).join("")}</ul>` : "";
-    return `<!doctype html><html><head><meta charset="utf-8"><title>Report — ${esc(study.name)}</title>
-<style>body{font-family:Segoe UI,Arial,sans-serif;color:#111;max-width:820px;margin:24px auto;padding:0 16px}h1{font-size:20px;border-bottom:2px solid #1a5ae0;padding-bottom:6px}h2{font-size:13px;color:#1a5ae0;margin:16px 0 4px;text-transform:uppercase;letter-spacing:.04em}table{border-collapse:collapse;width:100%;font-size:12px;margin:6px 0}td,th{border:1px solid #ccc;padding:4px 8px;text-align:left}.muted{color:#666;font-size:12px}img{max-width:360px;border:1px solid #ccc;border-radius:6px;margin-top:8px}.sec{white-space:pre-wrap;font-size:13px}ul{font-size:12px}</style></head><body>
-<h1>${BRAND.name} — Imaging Report</h1>
-${info ? `<h2>Patient & Study</h2><table>${info}</table>` : `<div class="muted">${esc(study.name)} · ${esc(study.modality)}</div>`}
-<h2>Series</h2><table><tr><th>Series</th><th>Modality</th><th>Images</th></tr>${rows}</table>
-${snapshot ? `<h2>Key image</h2><img src="${snapshot}"/>` : ""}${meas}
-<h2>Clinical history</h2><div class="sec">${esc(history) || "—"}</div>
-<h2>Technique</h2><div class="sec">${esc(technique) || "—"}</div>
-<h2>Findings</h2><div class="sec">${esc(findings) || (ai.connected ? "—" : "[AI analysis not connected — entered manually]")}</div>
-<h2>Impression</h2><div class="sec">${esc(impression) || "—"}</div>
-<p class="muted" style="margin-top:24px">Generated by ${BRAND.name}. Images processed locally.</p></body></html>`;
+    const infoPairs = ["Patient Name", "Patient ID", "Patient Birth Date", "Patient Sex", "Patient Age", "Study Date", "Modality", "Study Description", "Referring Physician"].filter((k) => d[k]).map((k) => `<div class="kv"><span>${esc(k)}</span><b>${esc(d[k])}</b></div>`).join("");
+    const meas = measurements.length ? `<h2>Measurements</h2><ul>${measurements.map((m) => `<li>${esc(m.tool.replace("Roi", " ROI"))}: <b>${esc(m.text)}</b></li>`).join("")}</ul>` : "";
+    const findingsHtml = findings ? md(findings) : `<p class="muted">${ai.connected ? "—" : "[AI analysis not connected — entered manually]"}</p>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${BRAND.name} Report — ${esc(study.name)}</title>
+<style>
+:root{--blue:#1a5ae0;--teal:#0d9488;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0}
+*{box-sizing:border-box}
+body{font-family:'Segoe UI',Roboto,Arial,sans-serif;color:var(--ink);margin:0;background:#f1f5f9}
+.page{max-width:860px;margin:24px auto;background:#fff;box-shadow:0 6px 30px -12px rgba(0,0,0,.25);border-radius:12px;overflow:hidden}
+.band{background:linear-gradient(120deg,#0a1023,#173c91 60%,#0d9488);color:#fff;padding:22px 28px;display:flex;justify-content:space-between;align-items:flex-end}
+.band h1{margin:0;font-size:22px;letter-spacing:.3px}
+.band .sub{opacity:.85;font-size:12px;margin-top:4px}
+.band .rt{text-align:right;font-size:12px;opacity:.9}
+.body{padding:24px 28px}
+h2{font-size:12px;color:var(--blue);margin:22px 0 8px;text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--line);padding-bottom:5px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 24px}
+.kv{display:flex;justify-content:space-between;font-size:13px;border-bottom:1px dotted var(--line);padding:3px 0}
+.kv span{color:var(--muted)} .kv b{color:var(--ink)}
+table{border-collapse:collapse;width:100%;font-size:12.5px;margin:4px 0}
+th{background:#f8fafc;text-align:left} td,th{border:1px solid var(--line);padding:6px 10px}
+.imgs{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+.imgs img{max-width:260px;border:1px solid var(--line);border-radius:8px}
+.card{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card h3{color:var(--teal);font-size:14px;margin:10px 0 4px} .card h3:first-child{margin-top:0}
+.card ul{margin:4px 0 8px 18px;padding:0} .card li{margin:3px 0;font-size:13px}
+.card p{font-size:13px;margin:6px 0;white-space:pre-wrap}
+.sec{white-space:pre-wrap;font-size:13px;color:#1e293b}
+.muted{color:var(--muted);font-size:12px}
+.disclaimer{margin-top:20px;padding:10px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;color:#9a3412;font-size:11.5px}
+.print-btn{position:fixed;top:18px;right:18px;background:var(--blue);color:#fff;border:0;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 14px -4px rgba(26,90,224,.6)}
+@media print{body{background:#fff}.page{box-shadow:none;margin:0;border-radius:0;max-width:100%}.print-btn{display:none}h2{page-break-after:avoid}.card,table{page-break-inside:avoid}}
+</style></head><body>
+<button class="print-btn" onclick="window.print()">🖨 Print / Save PDF</button>
+<div class="page">
+  <div class="band">
+    <div><h1>${BRAND.name} — Imaging Report</h1><div class="sub">${esc(d["Study Description"] || study.modality + " study")}</div></div>
+    <div class="rt">${esc(d["Study Date"] || "")}<br>${study.series.length} series · ${study.imageIds.length} images</div>
+  </div>
+  <div class="body">
+    <h2>Patient &amp; Study</h2>
+    <div class="grid">${infoPairs || `<div class="kv"><span>Study</span><b>${esc(study.name)}</b></div><div class="kv"><span>Modality</span><b>${esc(study.modality)}</b></div>`}</div>
+    <h2>Series</h2><table><tr><th>Series</th><th>Modality</th><th>Images</th></tr>${rows}</table>
+    ${snapshot ? `<h2>Key image</h2><div class="imgs"><img src="${snapshot}"/></div>` : ""}
+    ${meas}
+    <h2>Clinical history</h2><div class="sec">${esc(history) || "—"}</div>
+    <h2>Technique</h2><div class="sec">${esc(technique) || "—"}</div>
+    <h2>Findings</h2><div class="card">${findingsHtml}</div>
+    ${impression ? `<h2>Impression</h2><div class="card">${md(impression)}</div>` : ""}
+    <div class="disclaimer">⚠️ AI-assisted read of sampled slices across the whole study — clinical decision support only, <b>not a diagnosis</b>. Verify against the full study. Images processed locally.</div>
+    <p class="muted" style="margin-top:14px">Generated by ${BRAND.name}.</p>
+  </div>
+</div></body></html>`;
   }
   function downloadHtml() { const b = new Blob([buildHtml()], { type: "text/html" }); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = `report-${study.name.replace(/\W+/g, "_")}.html`; a.click(); onSaved(); }
   function printReport() { const w = window.open("", "_blank"); if (!w) return; w.document.write(buildHtml()); w.document.close(); w.focus(); setTimeout(() => w.print(), 300); }

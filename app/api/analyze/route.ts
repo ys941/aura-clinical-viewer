@@ -12,7 +12,16 @@ export const maxDuration = 300;
 //       MEDGEMMA_MODEL=medgemma     HF_TOKEN=hf_… (if private)
 
 const SYSTEM =
-  "You are a medical-imaging assistant. Based ONLY on the supplied representative images and metadata, produce a concise structured radiology read with two sections — 'Findings:' (bulleted) and 'Impression:'. Be cautious, note limitations of sampled images, and state clearly this is clinical decision support, not a diagnosis.";
+  "You are a medical-imaging assistant reading a whole imaging study. The images are montage grids: each grid tile is one slice sampled evenly across the ENTIRE study (small numbers label the slice index). Review ALL tiles across ALL montages, then produce a concise structured radiology read in clean Markdown with exactly two sections:\n\n## Findings\n- bulleted, specific, reference slice numbers where relevant\n\n## Impression\n- 1-3 sentence summary\n\nDo NOT show your reasoning, thoughts, or any special tokens — output only the two sections. Be cautious, note that only sampled slices were reviewed, and state this is clinical decision support, not a diagnosis.";
+
+// Strip model control / chain-of-thought tokens (e.g. MedGemma's <unused94> thought …).
+function clean(text: string): string {
+  let t = text.replace(/<\/?unused\d+>/gi, "").replace(/<\/?(end_of_turn|start_of_turn|bos|eos)>/gi, "");
+  // drop a leading "thought" reasoning preamble before the first heading/section
+  const cut = t.search(/(^|\n)\s*(#+\s*Findings|\*{0,2}Findings\b)/i);
+  if (cut > 0 && /thought/i.test(t.slice(0, cut))) t = t.slice(cut);
+  return t.trim();
+}
 
 export async function POST(req: Request) {
   let body: any = {};
@@ -21,7 +30,7 @@ export async function POST(req: Request) {
   const images: string[] = Array.isArray(body?.images) ? body.images.slice(0, 8) : [];
   const study = { name: body?.name ?? "study", modality: body?.modality ?? "—", imageCount: body?.imageCount ?? 0, sampled: images.length };
   const userText =
-    `Modality: ${study.modality}. Study: ${study.name}. ${images.length} representative image(s) sampled from ${study.imageCount} total. Give Findings and Impression.`;
+    `Modality: ${study.modality}. Study: ${study.name}. These ${images.length} montage image(s) tile slices sampled evenly across all ${study.imageCount} images of the study. Review every tile and give Findings and Impression.`;
 
   const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase();
 
@@ -70,7 +79,7 @@ async function gemini(study: any, userText: string, images: string[]) {
     const reason = data?.promptFeedback?.blockReason || data?.candidates?.[0]?.finishReason;
     return NextResponse.json({ connected: false, study, message: `No text returned${reason ? ` (${reason})` : ""}. Try a different model or fewer images.` });
   }
-  return NextResponse.json({ connected: true, study, model, text });
+  return NextResponse.json({ connected: true, study, model, text: clean(text) });
 }
 
 async function openai(study: any, userText: string, images: string[]) {
@@ -90,12 +99,12 @@ async function openai(study: any, userText: string, images: string[]) {
   const timer = setTimeout(() => controller.abort(), 290_000);
   const r = await fetch(endpoint, {
     method: "POST", headers, signal: controller.signal,
-    body: JSON.stringify({ model, messages: [{ role: "system", content: SYSTEM }, { role: "user", content: images.length ? content : userText }], max_tokens: 768, temperature: 0.2, stream: false }),
+    body: JSON.stringify({ model, messages: [{ role: "system", content: SYSTEM }, { role: "user", content: images.length ? content : userText }], max_tokens: 1200, temperature: 0.2, stream: false }),
   });
   clearTimeout(timer);
   if (r.status === 503) return NextResponse.json({ connected: false, study, message: "Endpoint waking up (cold start). Wait ~1 min and retry." });
   if (!r.ok) { const t = await r.text().catch(() => ""); return NextResponse.json({ connected: false, study, message: `Endpoint error ${r.status}. ${t.slice(0, 240)}` }); }
   const data = await r.json();
-  const text = (data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "").trim();
+  const text = clean((data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "").trim());
   return NextResponse.json({ connected: !!text, study, text: text || "(empty response)" });
 }
