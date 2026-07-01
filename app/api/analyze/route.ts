@@ -39,7 +39,15 @@ export async function POST(req: Request) {
     if (provider === "gemini") return await gemini(study, userText, images);
     return await openai(study, userText, images);
   } catch (e: any) {
-    const msg = e?.name === "AbortError" ? "Timed out waiting for the model. Try again or use fewer images." : `Request failed: ${e?.message || e}`;
+    const raw = String(e?.message || e);
+    let msg: string;
+    if (e?.name === "AbortError") {
+      msg = "Timed out waiting for the model. Try again or use fewer images.";
+    } else if (/fetch failed|ECONNREFUSED|ENOTFOUND|terminated|network/i.test(raw)) {
+      msg = "Couldn't reach the AI model. The Colab runtime is likely asleep or not started — run the notebook (Run all), then retry.";
+    } else {
+      msg = `Request failed: ${raw}`;
+    }
     return NextResponse.json({ connected: false, study, message: msg });
   }
 }

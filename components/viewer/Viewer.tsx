@@ -7,7 +7,6 @@ import { loadStudy, readImageTags, type LoadedStudy, type LoadedSeries } from "@
 import { Dropzone } from "@/components/Dropzone";
 import { cn } from "@/lib/cn";
 import { BRAND } from "@/lib/brand";
-import Link from "next/link";
 import {
   Contrast, Move, ZoomIn, Search, Ruler, Triangle, Square, Circle, Crosshair,
   MessageSquare, PenTool, RotateCw, FlipHorizontal, FlipVertical, SunMedium,
@@ -598,7 +597,7 @@ export default function Viewer() {
             {error && <div className="absolute inset-x-0 bottom-0 bg-critical/20 px-3 py-1.5 text-center text-xs text-critical">{error}</div>}
             <AnimatePresence>{ai.message && (
               <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="absolute left-1/2 top-3 max-w-md -translate-x-1/2 rounded-lg border border-teal-500/30 bg-navy-900/90 px-3 py-2 text-xs text-slate-200 backdrop-blur">
-                {ai.message} {ai.connected === false && <Link href="/settings" className="text-teal-300 underline">Connect a model</Link>}
+                {ai.message} {ai.connected === false && <a href="https://colab.research.google.com/gist/ys941/5d09f9d6abd2e8422baa7a072cd061b6/medgemma_aura_colab.ipynb" target="_blank" rel="noreferrer" className="text-teal-300 underline">Start the AI model (Colab → Run all)</a>}
               </motion.div>
             )}</AnimatePresence>
             {/* AI progress */}
