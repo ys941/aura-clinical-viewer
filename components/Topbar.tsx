@@ -46,7 +46,11 @@ export function Topbar() {
           </button>
           {showAi && (
             <Dropdown onClose={() => setShowAi(false)} title="AI Activity Center">
-              <EmptyState text="No active AI jobs. Connect a model and run an analysis to see activity here." />
+              <div className="px-2 py-4 text-center">
+                <div className="mx-auto mb-2 grid h-9 w-9 place-items-center rounded-full bg-teal-500/15 text-teal-300"><Sparkles className="h-4.5 w-4.5" /></div>
+                <p className="text-sm font-medium text-white">MedGemma (via Colab)</p>
+                <p className="mt-1 text-xs text-slate-400">Open a study in the <span className="text-teal-300">Viewer</span> and click the <span className="text-teal-300">AI</span> button to analyze the whole study.</p>
+              </div>
             </Dropdown>
           )}
         </div>

@@ -456,7 +456,11 @@ export default function Viewer() {
       });
       const data = await res.json();
       setAiProgress(null);
-      if (data.connected && data.text) { setAi({ loading: false, connected: true, text: data.text }); setShowAiResult(true); toast("AI analysis complete"); }
+      if (data.connected && data.text) {
+        const cv = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
+        setSnapshot(cv ? cv.toDataURL("image/png") : "");
+        setAi({ loading: false, connected: true, text: data.text }); setShowAiResult(true); toast("AI analysis complete");
+      }
       else setAi({ loading: false, connected: false, message: data.message || "No response." });
     } catch (e: any) { setAiProgress(null); setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
   }
@@ -644,7 +648,7 @@ export default function Viewer() {
       <Toasts toasts={toasts} />
       <AnimatePresence>{showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}</AnimatePresence>
       <AnimatePresence>{showAiResult && ai.text && (
-        <AiResultModal text={ai.text} model={(d["Modality"] || study.modality)} onClose={() => setShowAiResult(false)}
+        <AiResultModal text={ai.text} study={study} snapshot={snapshot} measurements={measurements} onClose={() => setShowAiResult(false)}
           onCopy={() => { navigator.clipboard?.writeText(ai.text || ""); toast("Findings copied"); }}
           onReport={() => { setShowAiResult(false); openReport(ai.text || ""); }} />
       )}</AnimatePresence>
@@ -695,81 +699,41 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 
-function AiResultModal({ text, model, onClose, onCopy, onReport }: { text: string; model: string; onClose: () => void; onCopy: () => void; onReport: () => void }) {
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-4">
-      <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="flex max-h-[85vh] w-full max-w-xl flex-col panel p-0">
-        <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
-          <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-teal-300" /><span className="text-sm font-semibold text-white">AI analysis — whole study</span></div>
-          <button onClick={onClose} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5">
-          <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{text}</div>
-          <p className="mt-4 rounded-lg border border-warn/20 bg-warn/5 p-2.5 text-[11px] text-warn">Decision support on sampled images — not a diagnosis. Verify against the full study.</p>
-        </div>
-        <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-3.5">
-          <button onClick={onCopy} className="btn-ghost"><Copy className="h-4 w-4" /> Copy</button>
-          <button onClick={onReport} className="btn-primary"><FileText className="h-4 w-4" /> Use in report</button>
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-}
+function dlHtml(html: string, name: string) { const b = new Blob([html], { type: "text/html" }); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = name; a.click(); }
+function printHtml(html: string) { const w = window.open("", "_blank"); if (!w) return; w.document.write(html); w.document.close(); w.focus(); setTimeout(() => w.print(), 350); }
 
-function ExportModal({ seriesName, total, current, fps, onClose, onExport }: { seriesName: string; total: number; current: number; fps: number; onClose: () => void; onExport: (format: "gif" | "png", from: number, to: number) => void }) {
-  const [from, setFrom] = useState(1); const [to, setTo] = useState(total);
-  const clamp = (n: number) => Math.max(1, Math.min(total, n || 1));
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="w-full max-w-md panel p-0">
-        <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5"><div className="flex items-center gap-2"><Film className="h-4 w-4 text-medical-300" /><span className="text-sm font-semibold text-white">Export / copy run</span></div><button onClick={onClose} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button></div>
-        <div className="space-y-4 p-5">
-          <p className="text-xs text-slate-400">Export <span className="text-slate-200">{seriesName}</span> ({total} frames). Pick the slides, then save a GIF (animated — drops into PowerPoint/Word) or a ZIP of PNGs.</p>
-          <div className="flex flex-wrap gap-2"><button onClick={() => { setFrom(1); setTo(total); }} className="rounded-md border border-white/10 bg-navy-850 px-2.5 py-1 text-xs text-slate-300 hover:bg-white/10">Whole run</button><button onClick={() => { setFrom(current); setTo(current); }} className="rounded-md border border-white/10 bg-navy-850 px-2.5 py-1 text-xs text-slate-300 hover:bg-white/10">This slide only</button></div>
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-xs text-slate-400">From<input type="number" min={1} max={total} value={from} onChange={(e) => setFrom(clamp(+e.target.value))} className="h-8 w-20 rounded-md border border-white/10 bg-navy-850 px-2 text-center text-sm text-slate-200" /></label>
-            <label className="flex items-center gap-2 text-xs text-slate-400">To<input type="number" min={1} max={total} value={to} onChange={(e) => setTo(clamp(+e.target.value))} className="h-8 w-20 rounded-md border border-white/10 bg-navy-850 px-2 text-center text-sm text-slate-200" /></label>
-            <span className="text-[11px] text-slate-500">{Math.abs(to - from) + 1} frames · {fps} fps</span>
-          </div>
-        </div>
-        <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-3.5"><button onClick={() => onExport("png", from, to)} className="btn-ghost"><Download className="h-4 w-4" /> PNG frames (.zip)</button><button onClick={() => onExport("gif", from, to)} className="btn-primary"><Film className="h-4 w-4" /> Animated GIF</button></div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
-function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; initialFindings?: string; onClose: () => void; onSaved: () => void }) {
+interface ReportOpts { patient?: string; history?: string; technique?: string; findings?: string; impression?: string; snapshot?: string; measurements?: { tool: string; text: string }[]; aiConnected?: boolean }
+function buildReportHtml(study: LoadedStudy, o: ReportOpts): string {
   const d = study.dict;
-  const [patient, setPatient] = useState(d["Patient Name"] || "");
-  const [history, setHistory] = useState("");
-  const [technique, setTechnique] = useState(`${study.modality} study comprising ${study.series.length} series (${study.imageIds.length} images): ${study.series.map((s) => `${s.name} [${s.count}]`).join(", ")}.`);
-  const [findings, setFindings] = useState(initialFindings);
-  const [impression, setImpression] = useState("");
-  function buildHtml() {
-    const esc = (s: string) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]!));
-    // minimal markdown → HTML (headings, bullets, bold) for the AI findings
-    const md = (src: string) => {
-      if (!src) return "";
-      const lines = esc(src).split(/\r?\n/);
-      let html = "", inList = false;
-      const closeList = () => { if (inList) { html += "</ul>"; inList = false; } };
-      for (let raw of lines) {
-        const line = raw.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`(.+?)`/g, "<code>$1</code>");
-        const h = line.match(/^\s*(#{1,4})\s+(.*)$/);
-        const li = line.match(/^\s*[-*]\s+(.*)$/);
-        if (h) { closeList(); html += `<h3>${h[2].replace(/[:#]+$/, "")}</h3>`; }
-        else if (li) { if (!inList) { html += "<ul>"; inList = true; } html += `<li>${li[1]}</li>`; }
-        else if (line.trim() === "") { closeList(); }
-        else { closeList(); html += `<p>${line}</p>`; }
-      }
-      closeList();
-      return html;
-    };
-    const rows = study.series.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.modality)}</td><td>${s.count}</td></tr>`).join("");
-    const infoPairs = ["Patient Name", "Patient ID", "Patient Birth Date", "Patient Sex", "Patient Age", "Study Date", "Modality", "Study Description", "Referring Physician"].filter((k) => d[k]).map((k) => `<div class="kv"><span>${esc(k)}</span><b>${esc(d[k])}</b></div>`).join("");
-    const meas = measurements.length ? `<h2>Measurements</h2><ul>${measurements.map((m) => `<li>${esc(m.tool.replace("Roi", " ROI"))}: <b>${esc(m.text)}</b></li>`).join("")}</ul>` : "";
-    const findingsHtml = findings ? md(findings) : `<p class="muted">${ai.connected ? "—" : "[AI analysis not connected — entered manually]"}</p>`;
-    return `<!doctype html><html><head><meta charset="utf-8"><title>${BRAND.name} Report — ${esc(study.name)}</title>
+  const measurements = o.measurements || [];
+  const snapshot = o.snapshot || "";
+  const history = o.history || "";
+  const technique = o.technique || `${study.modality} study comprising ${study.series.length} series (${study.imageIds.length} images): ${study.series.map((s) => `${s.name} [${s.count}]`).join(", ")}.`;
+  const impression = o.impression || "";
+  const findings = o.findings || "";
+  const esc = (s: string) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]!));
+  const md = (src: string) => {
+    if (!src) return "";
+    const lines = esc(src).split(/\r?\n/);
+    let html = "", inList = false;
+    const closeList = () => { if (inList) { html += "</ul>"; inList = false; } };
+    for (const raw of lines) {
+      const line = raw.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`(.+?)`/g, "<code>$1</code>");
+      const h = line.match(/^\s*(#{1,4})\s+(.*)$/);
+      const li = line.match(/^\s*[-*]\s+(.*)$/);
+      if (h) { closeList(); html += `<h3>${h[2].replace(/[:#]+$/, "")}</h3>`; }
+      else if (li) { if (!inList) { html += "<ul>"; inList = true; } html += `<li>${li[1]}</li>`; }
+      else if (line.trim() === "") { closeList(); }
+      else { closeList(); html += `<p>${line}</p>`; }
+    }
+    closeList();
+    return html;
+  };
+  const rows = study.series.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.modality)}</td><td>${s.count}</td></tr>`).join("");
+  const infoPairs = ["Patient Name", "Patient ID", "Patient Birth Date", "Patient Sex", "Patient Age", "Study Date", "Modality", "Study Description", "Referring Physician"].filter((k) => d[k]).map((k) => `<div class="kv"><span>${esc(k)}</span><b>${esc(d[k])}</b></div>`).join("");
+  const meas = measurements.length ? `<h2>Measurements</h2><ul>${measurements.map((m) => `<li>${esc(m.tool.replace("Roi", " ROI"))}: <b>${esc(m.text)}</b></li>`).join("")}</ul>` : "";
+  const findingsHtml = findings ? md(findings) : `<p class="muted">${o.aiConnected ? "—" : "[entered manually]"}</p>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${BRAND.name} Report — ${esc(study.name)}</title>
 <style>
 :root{--blue:#1a5ae0;--teal:#0d9488;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0}
 *{box-sizing:border-box}
@@ -810,17 +774,72 @@ th{background:#f8fafc;text-align:left} td,th{border:1px solid var(--line);paddin
     <h2>Series</h2><table><tr><th>Series</th><th>Modality</th><th>Images</th></tr>${rows}</table>
     ${snapshot ? `<h2>Key image</h2><div class="imgs"><img src="${snapshot}"/></div>` : ""}
     ${meas}
-    <h2>Clinical history</h2><div class="sec">${esc(history) || "—"}</div>
-    <h2>Technique</h2><div class="sec">${esc(technique) || "—"}</div>
+    ${history ? `<h2>Clinical history</h2><div class="sec">${esc(history)}</div>` : ""}
+    <h2>Technique</h2><div class="sec">${esc(technique)}</div>
     <h2>Findings</h2><div class="card">${findingsHtml}</div>
     ${impression ? `<h2>Impression</h2><div class="card">${md(impression)}</div>` : ""}
     <div class="disclaimer">⚠️ AI-assisted read of sampled slices across the whole study — clinical decision support only, <b>not a diagnosis</b>. Verify against the full study. Images processed locally.</div>
     <p class="muted" style="margin-top:14px">Generated by ${BRAND.name}.</p>
   </div>
 </div></body></html>`;
-  }
-  function downloadHtml() { const b = new Blob([buildHtml()], { type: "text/html" }); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = `report-${study.name.replace(/\W+/g, "_")}.html`; a.click(); onSaved(); }
-  function printReport() { const w = window.open("", "_blank"); if (!w) return; w.document.write(buildHtml()); w.document.close(); w.focus(); setTimeout(() => w.print(), 300); }
+}
+
+function AiResultModal({ text, study, snapshot, measurements, onClose, onCopy, onReport }: { text: string; study: LoadedStudy; snapshot: string; measurements: { tool: string; text: string }[]; onClose: () => void; onCopy: () => void; onReport: () => void }) {
+  const report = () => buildReportHtml(study, { findings: text, snapshot, measurements, aiConnected: true });
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-4">
+      <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="flex max-h-[85vh] w-full max-w-xl flex-col panel p-0">
+        <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
+          <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-teal-300" /><span className="text-sm font-semibold text-white">AI analysis — whole study</span></div>
+          <button onClick={onClose} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5">
+          <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{text}</div>
+          <p className="mt-4 rounded-lg border border-warn/20 bg-warn/5 p-2.5 text-[11px] text-warn">Decision support on sampled images — not a diagnosis. Verify against the full study.</p>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2 border-t border-white/10 px-5 py-3.5">
+          <button onClick={onCopy} className="btn-ghost"><Copy className="h-4 w-4" /> Copy</button>
+          <button onClick={() => printHtml(report())} className="btn-ghost">🖨 Print</button>
+          <button onClick={onReport} className="btn-ghost"><FileText className="h-4 w-4" /> Edit in report</button>
+          <button onClick={() => dlHtml(report(), `report-${study.name.replace(/\W+/g, "_")}.html`)} className="btn-primary"><Download className="h-4 w-4" /> Full report</button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function ExportModal({ seriesName, total, current, fps, onClose, onExport }: { seriesName: string; total: number; current: number; fps: number; onClose: () => void; onExport: (format: "gif" | "png", from: number, to: number) => void }) {
+  const [from, setFrom] = useState(1); const [to, setTo] = useState(total);
+  const clamp = (n: number) => Math.max(1, Math.min(total, n || 1));
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="w-full max-w-md panel p-0">
+        <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5"><div className="flex items-center gap-2"><Film className="h-4 w-4 text-medical-300" /><span className="text-sm font-semibold text-white">Export / copy run</span></div><button onClick={onClose} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button></div>
+        <div className="space-y-4 p-5">
+          <p className="text-xs text-slate-400">Export <span className="text-slate-200">{seriesName}</span> ({total} frames). Pick the slides, then save a GIF (animated — drops into PowerPoint/Word) or a ZIP of PNGs.</p>
+          <div className="flex flex-wrap gap-2"><button onClick={() => { setFrom(1); setTo(total); }} className="rounded-md border border-white/10 bg-navy-850 px-2.5 py-1 text-xs text-slate-300 hover:bg-white/10">Whole run</button><button onClick={() => { setFrom(current); setTo(current); }} className="rounded-md border border-white/10 bg-navy-850 px-2.5 py-1 text-xs text-slate-300 hover:bg-white/10">This slide only</button></div>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-xs text-slate-400">From<input type="number" min={1} max={total} value={from} onChange={(e) => setFrom(clamp(+e.target.value))} className="h-8 w-20 rounded-md border border-white/10 bg-navy-850 px-2 text-center text-sm text-slate-200" /></label>
+            <label className="flex items-center gap-2 text-xs text-slate-400">To<input type="number" min={1} max={total} value={to} onChange={(e) => setTo(clamp(+e.target.value))} className="h-8 w-20 rounded-md border border-white/10 bg-navy-850 px-2 text-center text-sm text-slate-200" /></label>
+            <span className="text-[11px] text-slate-500">{Math.abs(to - from) + 1} frames · {fps} fps</span>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-3.5"><button onClick={() => onExport("png", from, to)} className="btn-ghost"><Download className="h-4 w-4" /> PNG frames (.zip)</button><button onClick={() => onExport("gif", from, to)} className="btn-primary"><Film className="h-4 w-4" /> Animated GIF</button></div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; initialFindings?: string; onClose: () => void; onSaved: () => void }) {
+  const d = study.dict;
+  const [patient, setPatient] = useState(d["Patient Name"] || "");
+  const [history, setHistory] = useState("");
+  const [technique, setTechnique] = useState(`${study.modality} study comprising ${study.series.length} series (${study.imageIds.length} images): ${study.series.map((s) => `${s.name} [${s.count}]`).join(", ")}.`);
+  const [findings, setFindings] = useState(initialFindings);
+  const [impression, setImpression] = useState("");
+  const buildHtml = () => buildReportHtml(study, { patient, history, technique, findings, impression, snapshot, measurements, aiConnected: ai.connected });
+  function downloadHtml() { dlHtml(buildHtml(), `report-${study.name.replace(/\W+/g, "_")}.html`); onSaved(); }
+  function printReport() { printHtml(buildHtml()); }
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="flex max-h-[88vh] w-full max-w-2xl flex-col panel p-0">
