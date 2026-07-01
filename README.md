@@ -100,11 +100,10 @@ npm run dev          # → http://localhost:4477
 
 | Script | What it does |
 |---|---|
-| **`start-all.bat`** | Installs deps (first run), starts the dev app, opens the browser. |
+| **`start-all.bat`** ⭐ | **One‑click everything** — opens the MedGemma **Colab** notebook, installs deps (first run), starts the app, and opens the browser. The AI endpoint auto‑syncs. |
 | **`build-and-start.bat`** | Production build + `npm start` (faster, optimized). |
-| **`start-medgemma.bat`** | Opens the **MedGemma Colab** notebook *and* starts the app — the AI endpoint auto‑syncs. |
 
-There's also an **"Aura Viewer"** desktop shortcut. Close the terminal window to stop the server.
+There's also an **"Aura Viewer"** desktop shortcut pointing at `start-all.bat`. Close the terminal window to stop the server.
 
 ---
 
@@ -141,7 +140,7 @@ MEDGEMMA_MODEL=medgemma1.5
 
 Real, medical‑tuned **MedGemma 1.5 4B (vision)** — free, no local server, no HF token.
 
-1. Run **`start-medgemma.bat`** (or open [`colab/medgemma_aura_colab.ipynb`](colab/) in Colab).
+1. Run **`start-all.bat`** (it opens the notebook for you), or open [`colab/medgemma_aura_colab.ipynb`](colab/) in Colab directly.
 2. In Colab: **Runtime → Change runtime type → T4 GPU**, then **Runtime → Run all**.
 3. The notebook installs **Ollama**, pulls the vision model, exposes it via a free **Cloudflare tunnel**, and **auto‑publishes the endpoint** to a private **ntfy.sh** topic.
 4. The app **auto‑discovers** that endpoint — **no copy‑paste, no `.env` edits**. Just click **AI**.
