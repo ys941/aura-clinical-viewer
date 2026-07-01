@@ -17,6 +17,76 @@ import {
 
 const ACCEPT = ".dcm,.dicom,.ima,.png,.jpg,.jpeg,.gif,.bmp,.webp,.tif,.tiff,.zip,application/dicom,image/*,application/zip";
 
+// Derive the anatomical plane (view) from a DICOM image's ImageOrientationPatient.
+// Returns "Axial" | "Coronal" | "Sagittal", or "" when orientation is unavailable
+// (plain images / projection radiographs — those stay grouped as distinct views).
+function planeOfImage(cs: any, imageId: string): string {
+  try {
+    const m = cs?.metaData?.get?.("imagePlaneModule", imageId);
+    if (!m) return "";
+    let r = m.rowCosines, c = m.columnCosines;
+    const iop = m.imageOrientationPatient;
+    if ((!r || !c) && Array.isArray(iop) && iop.length >= 6) { r = iop.slice(0, 3); c = iop.slice(3, 6); }
+    const rv = vec3(r), cv = vec3(c);
+    if (!rv || !cv) return "";
+    const n = [rv[1] * cv[2] - rv[2] * cv[1], rv[2] * cv[0] - rv[0] * cv[2], rv[0] * cv[1] - rv[1] * cv[0]];
+    const ax = Math.abs(n[0]), ay = Math.abs(n[1]), az = Math.abs(n[2]);
+    if (az >= ax && az >= ay) return "Axial";
+    if (ay >= ax && ay >= az) return "Coronal";
+    return "Sagittal";
+  } catch { return ""; }
+}
+function vec3(v: any): number[] | null {
+  if (!v) return null;
+  if (Array.isArray(v)) return v.length >= 3 ? [+v[0], +v[1], +v[2]] : null;
+  if (typeof v === "object" && "x" in v) return [+v.x, +v.y, +v.z];
+  return null;
+}
+
+type KeyImage = { slice: number; view: string; caption: string; url: string };
+
+// Split the model's markdown into Technique / Findings / Impression by locating the
+// section headings and slicing between them (tolerant of "## H" or "**H**"). The Key
+// Images section is dropped from the prose — it is rendered as a thumbnail gallery.
+function splitAiReport(text: string): { technique: string; findings: string; impression: string } {
+  const re = /(^|\n)\s*(?:#{1,4}\s*)?\**\s*(technique|findings|impression|key\s*images?)\s*\**\s*:?\s*/gi;
+  const pos: { name: string; start: number; contentStart: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) pos.push({ name: m[2].toLowerCase().replace(/\s+/g, " "), start: m.index, contentStart: re.lastIndex });
+  const sec: Record<string, string> = {};
+  for (let i = 0; i < pos.length; i++) {
+    const p = pos[i], next = pos[i + 1];
+    const key = p.name.startsWith("key") ? "key images" : p.name;
+    sec[key] = text.slice(p.contentStart, next ? next.start : text.length).trim();
+  }
+  const technique = sec["technique"] || "";
+  let findings = sec["findings"] || "";
+  const impression = sec["impression"] || "";
+  if (!findings && !technique && !impression) findings = text.trim(); // model ignored headings
+  return { technique, findings, impression };
+}
+
+// Parse the "Key Images" section into slice references (slice number + optional view + caption).
+function parseKeyImageRefs(text: string): { slice: number; view?: string; caption?: string }[] {
+  const out: { slice: number; view?: string; caption?: string }[] = [];
+  const seen = new Set<number>();
+  const kiIdx = text.search(/#{0,4}\s*\**\s*key\s*images?\b/i);
+  const scope = kiIdx >= 0 ? text.slice(kiIdx) : text;
+  const re = /(?:^|\n)\s*[-*]?\s*(?:key\s*)?slice\s*#?\s*(\d+)\s*(?:\(([^)]*)\))?\s*[:\-–]?\s*([^\n]*)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(scope)) && out.length < 8) {
+    const slice = parseInt(m[1], 10);
+    if (!slice || seen.has(slice)) continue;
+    seen.add(slice);
+    out.push({ slice, view: (m[2] || "").trim() || undefined, caption: (m[3] || "").trim() || undefined });
+  }
+  if (!out.length) { // fallback: any "slice N" mentions anywhere
+    const re2 = /slice\s*#?\s*(\d+)/gi; let x: RegExpExecArray | null;
+    while ((x = re2.exec(text)) && out.length < 6) { const s = parseInt(x[1], 10); if (s && !seen.has(s)) { seen.add(s); out.push({ slice: s }); } }
+  }
+  return out;
+}
+
 const TOOLS = [
   { name: "Wwwc", label: "Window / Level", icon: Contrast },
   { name: "Pan", label: "Pan", icon: Move },
@@ -80,7 +150,9 @@ export default function Viewer() {
   const [showReport, setShowReport] = useState(false);
   const [reportFindings, setReportFindings] = useState("");
   const [reportImpression, setReportImpression] = useState("");
+  const [reportTechnique, setReportTechnique] = useState("");
   const [snapshot, setSnapshot] = useState("");
+  const [keyImages, setKeyImages] = useState<KeyImage[]>([]);
   const [exporting, setExporting] = useState<number | null>(null);
   const [showExport, setShowExport] = useState(false);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
@@ -404,86 +476,147 @@ export default function Viewer() {
     } catch (e: any) { setError(`Export failed: ${e?.message || e}`); try { api.cornerstone.disable(off); } catch {} off.remove(); setExporting(null); }
   }
 
-  // Cover the WHOLE study by sampling slices across ALL series and tiling them into a few
-  // montage grids. This lets one request (few images = few tokens) "see" the entire study.
-  async function buildStudyMontages(maxTiles = 36, cols = 4, rows = 4, tile = 256): Promise<string[]> {
+  // Cover the WHOLE study, but organize by VIEW so the model can report per view like a
+  // radiologist: group slices by anatomical plane (Axial/Coronal/Sagittal, derived from
+  // ImageOrientationPatient) — or, when there is no 3D orientation (e.g. X-ray/US), keep
+  // each series as its own distinct projection. Each view becomes ONE montage grid whose
+  // banner names the view. We never pass the series description text to the model.
+  async function buildStudyMontages(perGroup = 16, cols = 4, rows = 4, tile = 256): Promise<{ images: string[]; labels: string[] }> {
     const api = apiRef.current, main = elRef.current;
-    if (!api || !study) return [];
-    const ids = study.imageIds, n = ids.length; // all series, flattened
-    const count = Math.min(maxTiles, n);
-    const picks: number[] = [];
-    for (let k = 0; k < count; k++) picks.push(Math.floor(((k + 0.5) * n) / count));
-    const uniq = Array.from(new Set(picks));
-    const perMontage = cols * rows;
+    if (!api || !study) return { images: [], labels: [] };
+    const cs = api.cornerstone;
+
+    // Group global slice indices by view.
+    const order: string[] = [];
+    const groups = new Map<string, { label: string; idxs: number[] }>();
+    let genericView = 0, flat = 0;
+    for (const s of study.series) {
+      for (const id of s.imageIds) {
+        const plane = planeOfImage(cs, id);
+        const key = plane || `S:${s.id}`;
+        let g = groups.get(key);
+        if (!g) { g = { label: plane || `View ${++genericView}`, idxs: [] }; groups.set(key, g); order.push(key); }
+        g.idxs.push(flat++);
+      }
+    }
 
     const off = document.createElement("div");
     off.style.cssText = `position:fixed;left:-10000px;top:0;width:${tile}px;height:${tile}px;`;
     document.body.appendChild(off);
-    const montages: string[] = [];
+    const HEAD = 26;
+    const images: string[] = [], labels: string[] = [];
     try {
-      api.cornerstone.enable(off);
-      const mainVp = main ? api.cornerstone.getViewport(main) : null;
-      let mCanvas: HTMLCanvasElement | null = null, mCtx: CanvasRenderingContext2D | null = null, tileIdx = 0;
-      const startMontage = () => {
-        mCanvas = document.createElement("canvas");
-        mCanvas.width = cols * tile; mCanvas.height = rows * tile;
-        mCtx = mCanvas.getContext("2d")!;
-        mCtx.fillStyle = "#000"; mCtx.fillRect(0, 0, mCanvas.width, mCanvas.height);
-        tileIdx = 0;
-      };
-      startMontage();
-      setAiProgress({ done: 0, total: uniq.length, phase: "Rendering slices" });
-      for (let s = 0; s < uniq.length; s++) {
-        const img = await api.cornerstone.loadAndCacheImage(ids[uniq[s]]);
-        api.cornerstone.displayImage(off, img);
-        if (mainVp) { const vp = api.cornerstone.getViewport(off); vp.voi = { ...mainVp.voi }; vp.invert = mainVp.invert; api.cornerstone.setViewport(off, vp); }
-        try { api.cornerstone.fitToWindow(off); } catch {}
-        api.cornerstone.updateImage(off);
-        await new Promise((r) => requestAnimationFrame(() => r(null)));
-        const c = off.querySelector("canvas") as HTMLCanvasElement;
-        const cx = (tileIdx % cols) * tile, cy = Math.floor(tileIdx / cols) * tile;
-        mCtx!.drawImage(c, cx, cy, tile, tile);
-        // small index label per tile
-        mCtx!.fillStyle = "rgba(0,0,0,0.55)"; mCtx!.fillRect(cx, cy, 34, 16);
-        mCtx!.fillStyle = "#7ce0ff"; mCtx!.font = "11px monospace"; mCtx!.fillText(String(uniq[s] + 1), cx + 3, cy + 12);
-        tileIdx++;
-        setAiProgress({ done: s + 1, total: uniq.length, phase: "Rendering slices" });
-        if (tileIdx === perMontage || s === uniq.length - 1) { montages.push(mCanvas!.toDataURL("image/jpeg", 0.8)); if (s !== uniq.length - 1) startMontage(); }
+      cs.enable(off);
+      const mainVp = main ? cs.getViewport(main) : null;
+      const ids = study.imageIds;
+      // Plan: sample each view evenly into up to `perGroup` tiles.
+      const plans = order.map((k) => {
+        const g = groups.get(k)!; const n = g.idxs.length, take = Math.min(perGroup, n);
+        const picks: number[] = [];
+        for (let t = 0; t < take; t++) picks.push(g.idxs[Math.floor(((t + 0.5) * n) / take)]);
+        return { label: g.label, picks: Array.from(new Set(picks)) };
+      });
+      const totalTiles = plans.reduce((a, p) => a + p.picks.length, 0);
+      let done = 0;
+      setAiProgress({ done: 0, total: totalTiles, phase: "Rendering views" });
+
+      for (const plan of plans) {
+        const canvas = document.createElement("canvas");
+        canvas.width = cols * tile; canvas.height = rows * tile + HEAD;
+        const ctx = canvas.getContext("2d")!;
+        ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // view banner
+        ctx.fillStyle = "#0b1220"; ctx.fillRect(0, 0, canvas.width, HEAD);
+        ctx.fillStyle = "#7ce0ff"; ctx.font = "bold 15px monospace";
+        ctx.fillText(`${plan.label.toUpperCase()}  ·  ${study.modality}`, 8, 18);
+
+        let ti = 0;
+        for (const gi of plan.picks) {
+          const img = await cs.loadAndCacheImage(ids[gi]);
+          cs.displayImage(off, img);
+          if (mainVp) { const vp = cs.getViewport(off); vp.voi = { ...mainVp.voi }; vp.invert = mainVp.invert; cs.setViewport(off, vp); }
+          try { cs.fitToWindow(off); } catch {}
+          cs.updateImage(off);
+          await new Promise((r) => requestAnimationFrame(() => r(null)));
+          const src = off.querySelector("canvas") as HTMLCanvasElement;
+          const cx = (ti % cols) * tile, cy = HEAD + Math.floor(ti / cols) * tile;
+          ctx.drawImage(src, cx, cy, tile, tile);
+          ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(cx, cy, 34, 16);
+          ctx.fillStyle = "#7ce0ff"; ctx.font = "11px monospace"; ctx.fillText(String(gi + 1), cx + 3, cy + 12);
+          ti++; setAiProgress({ done: ++done, total: totalTiles, phase: `Rendering ${plan.label}` });
+        }
+        images.push(canvas.toDataURL("image/jpeg", 0.8)); labels.push(plan.label);
       }
     } catch (e) { console.warn("montage error", e); }
-    finally { try { api.cornerstone.disable(off); } catch {} off.remove(); }
-    return montages;
+    finally { try { cs.disable(off); } catch {} off.remove(); }
+    return { images, labels };
+  }
+
+  // Render the exact slices the model cited (its "Key Images") into thumbnails for the report.
+  async function renderKeyImages(refs: { slice: number; view?: string; caption?: string }[]): Promise<KeyImage[]> {
+    const api = apiRef.current, main = elRef.current;
+    if (!api || !study || !refs.length) return [];
+    const cs = api.cornerstone, ids = study.imageIds, T = 320;
+    const off = document.createElement("div");
+    off.style.cssText = `position:fixed;left:-10000px;top:0;width:${T}px;height:${T}px;`;
+    document.body.appendChild(off);
+    const out: KeyImage[] = [];
+    try {
+      cs.enable(off);
+      const mainVp = main ? cs.getViewport(main) : null;
+      for (const r of refs) {
+        const gi = r.slice - 1;
+        if (gi < 0 || gi >= ids.length) continue;
+        const img = await cs.loadAndCacheImage(ids[gi]);
+        cs.displayImage(off, img);
+        if (mainVp) { const vp = cs.getViewport(off); vp.voi = { ...mainVp.voi }; vp.invert = mainVp.invert; cs.setViewport(off, vp); }
+        try { cs.fitToWindow(off); } catch {}
+        cs.updateImage(off);
+        await new Promise((res) => requestAnimationFrame(() => res(null)));
+        const src = off.querySelector("canvas") as HTMLCanvasElement;
+        const c = document.createElement("canvas"); c.width = T; c.height = T;
+        const ctx = c.getContext("2d")!; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, T, T);
+        ctx.drawImage(src, 0, 0, T, T);
+        out.push({ slice: r.slice, view: r.view || planeOfImage(cs, ids[gi]) || "", caption: r.caption || "", url: c.toDataURL("image/jpeg", 0.85) });
+      }
+    } catch (e) { console.warn("key image error", e); }
+    finally { try { cs.disable(off); } catch {} off.remove(); }
+    return out;
   }
 
   async function runAi() {
     if (!study) return;
     setAi({ loading: true }); setAiProgress({ done: 0, total: 1, phase: "Preparing" });
     try {
-      const images = await buildStudyMontages(36);
+      const { images, labels } = await buildStudyMontages();
       setAiProgress({ done: 1, total: 1, phase: "Analyzing with MedGemma" });
       const res = await fetch("/api/analyze", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: study.name, modality: study.modality, imageCount: study.imageIds.length, seriesCount: study.series.length, montages: images.length, images }),
+        body: JSON.stringify({ name: study.name, modality: study.modality, imageCount: study.imageIds.length, seriesCount: study.series.length, montages: images.length, views: labels, images }),
       });
       const data = await res.json();
-      setAiProgress(null);
       if (data.connected && data.text) {
         const cv = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
         setSnapshot(cv ? cv.toDataURL("image/png") : "");
-        // split the AI output into Findings + Impression for the editable report
         const t: string = data.text;
-        const m = t.match(/\n\s*#{0,4}\s*impression\b\s*:?/i);
-        if (m && m.index != null) { setReportFindings(t.slice(0, m.index).trim()); setReportImpression(t.slice(m.index).replace(/^\s*\n?\s*#{0,4}\s*impression\b\s*:?/i, "").trim()); }
-        else { setReportFindings(t); setReportImpression(""); }
+        // split the AI output into Technique / Findings / Impression for the editable report
+        const parts = splitAiReport(t);
+        setReportTechnique(parts.technique);
+        setReportFindings(parts.findings || t);
+        setReportImpression(parts.impression);
+        // capture the exact slices the model called out as "Key Images"
+        setAiProgress({ done: 0, total: 1, phase: "Capturing key images" });
+        try { setKeyImages(await renderKeyImages(parseKeyImageRefs(t))); } catch { setKeyImages([]); }
+        setAiProgress(null);
         setAi({ loading: false, connected: true, text: t });
         setShowReport(true); // auto-open the beautiful, editable report
         toast("AI analysis complete — report ready");
       }
-      else setAi({ loading: false, connected: false, message: data.message || "No response." });
+      else { setAiProgress(null); setAi({ loading: false, connected: false, message: data.message || "No response." }); }
     } catch (e: any) { setAiProgress(null); setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
   }
 
-  function openReport(findings = "") { setReportFindings(findings); setReportImpression(""); const canvas = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null; setSnapshot(canvas ? canvas.toDataURL("image/png") : ""); setShowReport(true); }
+  function openReport(findings = "") { setReportFindings(findings); setReportImpression(""); setReportTechnique(""); setKeyImages([]); const canvas = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null; setSnapshot(canvas ? canvas.toDataURL("image/png") : ""); setShowReport(true); }
 
   // ───────── empty state ─────────
   if (study === null) {
@@ -666,11 +799,11 @@ export default function Viewer() {
       <Toasts toasts={toasts} />
       <AnimatePresence>{showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}</AnimatePresence>
       <AnimatePresence>{showAiResult && ai.text && (
-        <AiResultModal text={ai.text} study={study} snapshot={snapshot} measurements={measurements} onClose={() => setShowAiResult(false)}
+        <AiResultModal text={ai.text} study={study} snapshot={snapshot} keyImages={keyImages} measurements={measurements} onClose={() => setShowAiResult(false)}
           onCopy={() => { navigator.clipboard?.writeText(ai.text || ""); toast("Findings copied"); }}
           onReport={() => { setShowAiResult(false); openReport(ai.text || ""); }} />
       )}</AnimatePresence>
-      <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} initialFindings={reportFindings} initialImpression={reportImpression} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
+      <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} initialFindings={reportFindings} initialImpression={reportImpression} initialTechnique={reportTechnique} keyImages={keyImages} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
       <AnimatePresence>{showExport && activeSeries && <ExportModal seriesName={activeSeries.name} total={total} current={index + 1} fps={fps} onClose={() => setShowExport(false)} onExport={exportRun} />}</AnimatePresence>
     </div>
   );
@@ -720,14 +853,15 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
 function dlHtml(html: string, name: string) { const b = new Blob([html], { type: "text/html" }); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = name; a.click(); }
 function printHtml(html: string) { const w = window.open("", "_blank"); if (!w) return; w.document.write(html); w.document.close(); w.focus(); setTimeout(() => w.print(), 350); }
 
-interface ReportOpts { info?: Record<string, string>; history?: string; technique?: string; findings?: string; impression?: string; snapshot?: string; measurements?: { tool: string; text: string }[]; aiConnected?: boolean }
+interface ReportOpts { info?: Record<string, string>; history?: string; technique?: string; findings?: string; impression?: string; snapshot?: string; keyImages?: KeyImage[]; measurements?: { tool: string; text: string }[]; aiConnected?: boolean }
 function buildReportHtml(study: LoadedStudy, o: ReportOpts): string {
   const d = study.dict;
   const info = o.info || {};
   const measurements = o.measurements || [];
   const snapshot = o.snapshot || "";
+  const keyImages = o.keyImages || [];
   const history = o.history || "";
-  const technique = o.technique || `${study.modality} study comprising ${study.series.length} series (${study.imageIds.length} images): ${study.series.map((s) => `${s.name} [${s.count}]`).join(", ")}.`;
+  const technique = o.technique || `${study.modality} study — ${study.imageIds.length} images across ${study.series.length} view(s).`;
   const impression = o.impression || "";
   const findings = o.findings || "";
   const esc = (s: string) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]!));
@@ -772,6 +906,11 @@ table{border-collapse:collapse;width:100%;font-size:12.5px;margin:4px 0}
 th{background:#f8fafc;text-align:left} td,th{border:1px solid var(--line);padding:6px 10px}
 .imgs{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
 .imgs img{max-width:260px;border:1px solid var(--line);border-radius:8px}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:8px}
+.kimg{margin:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#0b1220}
+.kimg img{width:100%;display:block;background:#000}
+.kimg figcaption{font-size:11px;color:#334155;padding:6px 8px;background:#f8fafc;border-top:1px solid var(--line)}
+.kimg figcaption b{color:var(--teal)}
 .card{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
 .card h3{color:var(--teal);font-size:14px;margin:10px 0 4px} .card h3:first-child{margin-top:0}
 .card ul{margin:4px 0 8px 18px;padding:0} .card li{margin:3px 0;font-size:13px}
@@ -792,20 +931,22 @@ th{background:#f8fafc;text-align:left} td,th{border:1px solid var(--line);paddin
     <h2>Patient &amp; Study</h2>
     <div class="grid">${infoPairs || `<div class="kv"><span>Study</span><b>${esc(study.name)}</b></div><div class="kv"><span>Modality</span><b>${esc(study.modality)}</b></div>`}</div>
     <h2>Series</h2><table><tr><th>Series</th><th>Modality</th><th>Images</th></tr>${rows}</table>
-    ${snapshot ? `<h2>Key image</h2><div class="imgs"><img src="${snapshot}"/></div>` : ""}
+    ${snapshot ? `<h2>Current view</h2><div class="imgs"><img src="${snapshot}"/></div>` : ""}
     ${meas}
     ${history ? `<h2>Clinical history</h2><div class="sec">${esc(history)}</div>` : ""}
     <h2>Technique</h2><div class="sec">${esc(technique)}</div>
     <h2>Findings</h2><div class="card">${findingsHtml}</div>
     ${impression ? `<h2>Impression</h2><div class="card">${md(impression)}</div>` : ""}
+    ${keyImages.length ? `<h2>Key Images</h2><div class="gallery">${keyImages.map((k) => `<figure class="kimg"><img src="${k.url}" alt="slice ${k.slice}"/><figcaption><b>Slice ${k.slice}${k.view ? ` · ${esc(k.view)}` : ""}</b>${k.caption ? `<br>${esc(k.caption)}` : ""}</figcaption></figure>`).join("")}</div>` : ""}
     <div class="disclaimer">⚠️ AI-assisted read of sampled slices across the whole study — clinical decision support only, <b>not a diagnosis</b>. Verify against the full study. Images processed locally.</div>
     <p class="muted" style="margin-top:14px">Generated by ${BRAND.name}.</p>
   </div>
 </div></body></html>`;
 }
 
-function AiResultModal({ text, study, snapshot, measurements, onClose, onCopy, onReport }: { text: string; study: LoadedStudy; snapshot: string; measurements: { tool: string; text: string }[]; onClose: () => void; onCopy: () => void; onReport: () => void }) {
-  const report = () => buildReportHtml(study, { findings: text, snapshot, measurements, aiConnected: true });
+function AiResultModal({ text, study, snapshot, keyImages = [], measurements, onClose, onCopy, onReport }: { text: string; study: LoadedStudy; snapshot: string; keyImages?: KeyImage[]; measurements: { tool: string; text: string }[]; onClose: () => void; onCopy: () => void; onReport: () => void }) {
+  const parts = splitAiReport(text);
+  const report = () => buildReportHtml(study, { technique: parts.technique, findings: parts.findings || text, impression: parts.impression, snapshot, keyImages, measurements, aiConnected: true });
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-4">
       <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="flex max-h-[85vh] w-full max-w-xl flex-col panel p-0">
@@ -850,7 +991,7 @@ function ExportModal({ seriesName, total, current, fps, onClose, onExport }: { s
   );
 }
 
-function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", initialImpression = "", onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; initialFindings?: string; initialImpression?: string; onClose: () => void; onSaved: () => void }) {
+function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", initialImpression = "", initialTechnique = "", keyImages = [], onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; initialFindings?: string; initialImpression?: string; initialTechnique?: string; keyImages?: KeyImage[]; onClose: () => void; onSaved: () => void }) {
   const d = study.dict;
   // all details, auto-filled from DICOM, fully editable
   const [f, setF] = useState<Record<string, string>>({
@@ -862,10 +1003,10 @@ function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", 
   });
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
   const [history, setHistory] = useState("");
-  const [technique, setTechnique] = useState(`${study.modality} study comprising ${study.series.length} series (${study.imageIds.length} images): ${study.series.map((s) => `${s.name} [${s.count}]`).join(", ")}.`);
+  const [technique, setTechnique] = useState(initialTechnique || `${study.modality} study — ${study.imageIds.length} images across ${study.series.length} view(s).`);
   const [findings, setFindings] = useState(initialFindings);
   const [impression, setImpression] = useState(initialImpression);
-  const buildHtml = () => buildReportHtml(study, { info: f, history, technique, findings, impression, snapshot, measurements, aiConnected: ai.connected });
+  const buildHtml = () => buildReportHtml(study, { info: f, history, technique, findings, impression, snapshot, keyImages, measurements, aiConnected: ai.connected });
   function downloadHtml() { dlHtml(buildHtml(), `report-${(f["Patient Name"] || study.name).replace(/\W+/g, "_")}.html`); onSaved(); }
   function printReport() { printHtml(buildHtml()); }
   const detailFields = ["Patient Name", "Patient ID", "Patient Sex", "Patient Age", "Study Date", "Study Description", "Referring Physician", "Accession #"];
@@ -875,6 +1016,19 @@ function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", 
         <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5"><div className="flex items-center gap-2"><FileText className="h-4 w-4 text-medical-300" /><span className="text-sm font-semibold text-white">Structured Report — editable</span></div><button onClick={onClose} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button></div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
           <div className="flex gap-4">{snapshot && <img src={snapshot} alt="key" className="h-24 w-24 shrink-0 rounded-lg border border-white/10 object-contain" />}<div className="flex-1 text-xs text-slate-400"><div className="font-semibold text-slate-200">{f["Patient Name"] || study.name}</div><div>{study.modality} · {study.series.length} series · {study.imageIds.length} images</div>{measurements.length > 0 && <div className="mt-1 text-slate-300">{measurements.length} measurement(s) included</div>}<div className="mt-1 text-good">All fields below are editable — the report uses your edits.</div></div></div>
+          {keyImages.length > 0 && (
+            <div>
+              <label className="label-tiny">Key images ({keyImages.length}) — slices the AI flagged</label>
+              <div className="mt-1 grid grid-cols-4 gap-2">
+                {keyImages.map((k, i) => (
+                  <figure key={i} className="overflow-hidden rounded-lg border border-white/10 bg-black">
+                    <img src={k.url} alt={`slice ${k.slice}`} className="aspect-square w-full object-cover" />
+                    <figcaption className="truncate px-1.5 py-1 text-[10px] text-slate-400" title={k.caption}>Slice {k.slice}{k.view ? ` · ${k.view}` : ""}</figcaption>
+                  </figure>
+                ))}
+              </div>
+            </div>
+          )}
           <div>
             <label className="label-tiny">Patient &amp; study details</label>
             <div className="mt-1 grid grid-cols-2 gap-2">

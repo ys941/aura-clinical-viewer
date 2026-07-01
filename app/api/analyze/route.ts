@@ -13,13 +13,20 @@ export const maxDuration = 300;
 //       MEDGEMMA_MODEL=medgemma     HF_TOKEN=hf_… (if private)
 
 const SYSTEM =
-  "You are a medical-imaging assistant reading a whole imaging study. The images are montage grids: each grid tile is one slice sampled evenly across the ENTIRE study (small numbers label the slice index). Review ALL tiles across ALL montages, then produce a concise structured radiology read in clean Markdown with exactly two sections:\n\n## Findings\n- bulleted, specific, reference slice numbers where relevant\n\n## Impression\n- 1-3 sentence summary\n\nDo NOT show your reasoning, thoughts, or any special tokens — output only the two sections. Be cautious, note that only sampled slices were reviewed, and state this is clinical decision support, not a diagnosis.";
+  "You are a radiologist producing a structured report from an imaging study.\n" +
+  "You are given montage images — EACH montage is ONE view/plane of the study, and its top banner names the view (e.g. AXIAL, CORONAL, SAGITTAL, or 'VIEW N' when the plane is not encoded in the data). Each tile inside a montage is a slice sampled across that view; the small cyan number on a tile is that slice's index in the study.\n\n" +
+  "Read every tile of every view. Do NOT rely on or invent series names — identify each view from its banner (and for 'VIEW N', identify the projection/plane yourself from the image, e.g. frontal/PA, lateral, oblique). Then write a concise, professional report in clean Markdown with EXACTLY these sections:\n\n" +
+  "## Technique\n- One line: the modality and the views/planes provided.\n\n" +
+  "## Findings\nOrganize findings BY VIEW. For each view present, use a bold sub-label and describe what that view shows, citing slice numbers where relevant:\n- **Axial:** …\n- **Coronal:** …\n- **Sagittal:** …\n(For radiographs/other, use the projection you identify, e.g. **Frontal:**, **Lateral:**.) Be systematic; note normal structures and any abnormality with its location and slice number.\n\n" +
+  "## Impression\n- 1–3 numbered, concise clinical takeaways.\n\n" +
+  "## Key Images\nList ONLY the slice numbers that best demonstrate the findings/impression, one per line, as:\n- Slice <number> (<view>): <what it shows>\nUse the exact slice numbers printed on the tiles. If the study is unremarkable, write '- None'.\n\n" +
+  "Rules: only sampled slices were reviewed — say so. This is clinical decision support, not a diagnosis. Output ONLY these sections — no reasoning, no special tokens.";
 
 // Strip model control / chain-of-thought tokens (e.g. MedGemma's <unused94> thought …).
 function clean(text: string): string {
   let t = text.replace(/<\/?unused\d+>/gi, "").replace(/<\/?(end_of_turn|start_of_turn|bos|eos)>/gi, "");
-  // drop a leading "thought" reasoning preamble before the first heading/section
-  const cut = t.search(/(^|\n)\s*(#+\s*Findings|\*{0,2}Findings\b)/i);
+  // drop a leading "thought" reasoning preamble before the first real heading/section
+  const cut = t.search(/(^|\n)\s*(#+\s*(Technique|Findings)|\*{0,2}(Technique|Findings)\b)/i);
   if (cut > 0 && /thought/i.test(t.slice(0, cut))) t = t.slice(cut);
   return t.trim();
 }
@@ -29,9 +36,13 @@ export async function POST(req: Request) {
   try { body = await req.json(); } catch {}
 
   const images: string[] = Array.isArray(body?.images) ? body.images.slice(0, 8) : [];
+  const views: string[] = Array.isArray(body?.views) ? body.views.map((v: any) => String(v)) : [];
   const study = { name: body?.name ?? "study", modality: body?.modality ?? "—", imageCount: body?.imageCount ?? 0, sampled: images.length };
+  const viewList = views.length
+    ? views.map((v, i) => `montage ${i + 1} = ${v} view`).join("; ")
+    : `${images.length} montage(s)`;
   const userText =
-    `Modality: ${study.modality}. Study: ${study.name}. These ${images.length} montage image(s) tile slices sampled evenly across all ${study.imageCount} images of the study. Review every tile and give Findings and Impression.`;
+    `Modality: ${study.modality}. There are ${images.length} montage image(s), one per view (${viewList}). Each tile is a slice sampled across that view (${study.imageCount} images total). Read every view, then produce the report with Findings grouped per view, an Impression, and a Key Images list of the slice numbers that show the findings.`;
 
   const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase();
 
@@ -98,8 +109,9 @@ async function openai(study: any, userText: string, images: string[]) {
   if (!endpoint) {
     return NextResponse.json({ connected: false, study, message: "MedGemma endpoint not found. Start the Colab notebook (it auto-publishes the endpoint), or set MEDGEMMA_ENDPOINT in .env.local." });
   }
-  // Cap images so requests stay responsive (GPU Colab handles ~4 easily).
-  const capped = images.slice(0, 4);
+  // Cap images so requests stay responsive (GPU Colab handles a handful easily).
+  // One montage per view — allow up to 6 so axial+coronal+sagittal (+extras) all go.
+  const capped = images.slice(0, 6);
   const content: any[] = [{ type: "text", text: userText }];
   for (const u of capped) content.push({ type: "image_url", image_url: { url: u } });
   const headers: Record<string, string> = { "Content-Type": "application/json" };
