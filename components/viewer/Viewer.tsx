@@ -516,7 +516,7 @@ export default function Viewer() {
   const patientTags = ["Patient Name", "Patient ID", "Patient Birth Date", "Patient Sex", "Patient Age", "Patient Weight", "Patient Address", "Study Date", "Study Time", "Study ID", "Modality", "Study Description", "Referring Physician", "Series Description"].map((label) => ({ label, value: d[label] || activeSeries?.dict[label] || "" }));
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] flex-col gap-2">
+    <div className="flex h-[calc(100vh-9.5rem)] flex-col gap-2">
       {/* PATIENT HEADER */}
       <div className={cn("flex items-center gap-3", fullscreen && "hidden")}>
         <div className="flex min-w-0 items-center gap-2">
