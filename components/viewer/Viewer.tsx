@@ -80,6 +80,7 @@ export default function Viewer() {
   const [showAiResult, setShowAiResult] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [reportFindings, setReportFindings] = useState("");
+  const [reportImpression, setReportImpression] = useState("");
   const [snapshot, setSnapshot] = useState("");
   const [exporting, setExporting] = useState<number | null>(null);
   const [showExport, setShowExport] = useState(false);
@@ -459,13 +460,20 @@ export default function Viewer() {
       if (data.connected && data.text) {
         const cv = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
         setSnapshot(cv ? cv.toDataURL("image/png") : "");
-        setAi({ loading: false, connected: true, text: data.text }); setShowAiResult(true); toast("AI analysis complete");
+        // split the AI output into Findings + Impression for the editable report
+        const t: string = data.text;
+        const m = t.match(/\n\s*#{0,4}\s*impression\b\s*:?/i);
+        if (m && m.index != null) { setReportFindings(t.slice(0, m.index).trim()); setReportImpression(t.slice(m.index).replace(/^\s*\n?\s*#{0,4}\s*impression\b\s*:?/i, "").trim()); }
+        else { setReportFindings(t); setReportImpression(""); }
+        setAi({ loading: false, connected: true, text: t });
+        setShowReport(true); // auto-open the beautiful, editable report
+        toast("AI analysis complete — report ready");
       }
       else setAi({ loading: false, connected: false, message: data.message || "No response." });
     } catch (e: any) { setAiProgress(null); setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
   }
 
-  function openReport(findings = "") { setReportFindings(findings); const canvas = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null; setSnapshot(canvas ? canvas.toDataURL("image/png") : ""); setShowReport(true); }
+  function openReport(findings = "") { setReportFindings(findings); setReportImpression(""); const canvas = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null; setSnapshot(canvas ? canvas.toDataURL("image/png") : ""); setShowReport(true); }
 
   // ───────── empty state ─────────
   if (study === null) {
@@ -652,7 +660,7 @@ export default function Viewer() {
           onCopy={() => { navigator.clipboard?.writeText(ai.text || ""); toast("Findings copied"); }}
           onReport={() => { setShowAiResult(false); openReport(ai.text || ""); }} />
       )}</AnimatePresence>
-      <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} initialFindings={reportFindings} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
+      <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} initialFindings={reportFindings} initialImpression={reportImpression} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
       <AnimatePresence>{showExport && activeSeries && <ExportModal seriesName={activeSeries.name} total={total} current={index + 1} fps={fps} onClose={() => setShowExport(false)} onExport={exportRun} />}</AnimatePresence>
     </div>
   );
@@ -702,9 +710,10 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
 function dlHtml(html: string, name: string) { const b = new Blob([html], { type: "text/html" }); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = name; a.click(); }
 function printHtml(html: string) { const w = window.open("", "_blank"); if (!w) return; w.document.write(html); w.document.close(); w.focus(); setTimeout(() => w.print(), 350); }
 
-interface ReportOpts { patient?: string; history?: string; technique?: string; findings?: string; impression?: string; snapshot?: string; measurements?: { tool: string; text: string }[]; aiConnected?: boolean }
+interface ReportOpts { info?: Record<string, string>; history?: string; technique?: string; findings?: string; impression?: string; snapshot?: string; measurements?: { tool: string; text: string }[]; aiConnected?: boolean }
 function buildReportHtml(study: LoadedStudy, o: ReportOpts): string {
   const d = study.dict;
+  const info = o.info || {};
   const measurements = o.measurements || [];
   const snapshot = o.snapshot || "";
   const history = o.history || "";
@@ -730,7 +739,8 @@ function buildReportHtml(study: LoadedStudy, o: ReportOpts): string {
     return html;
   };
   const rows = study.series.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.modality)}</td><td>${s.count}</td></tr>`).join("");
-  const infoPairs = ["Patient Name", "Patient ID", "Patient Birth Date", "Patient Sex", "Patient Age", "Study Date", "Modality", "Study Description", "Referring Physician"].filter((k) => d[k]).map((k) => `<div class="kv"><span>${esc(k)}</span><b>${esc(d[k])}</b></div>`).join("");
+  const val = (k: string) => (info[k] ?? d[k] ?? "");
+  const infoPairs = ["Patient Name", "Patient ID", "Patient Birth Date", "Patient Sex", "Patient Age", "Study Date", "Modality", "Study Description", "Referring Physician", "Accession #"].map((k) => [k, val(k)] as const).filter(([, v]) => v).map(([k, v]) => `<div class="kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
   const meas = measurements.length ? `<h2>Measurements</h2><ul>${measurements.map((m) => `<li>${esc(m.tool.replace("Roi", " ROI"))}: <b>${esc(m.text)}</b></li>`).join("")}</ul>` : "";
   const findingsHtml = findings ? md(findings) : `<p class="muted">${o.aiConnected ? "—" : "[entered manually]"}</p>`;
   return `<!doctype html><html><head><meta charset="utf-8"><title>${BRAND.name} Report — ${esc(study.name)}</title>
@@ -765,8 +775,8 @@ th{background:#f8fafc;text-align:left} td,th{border:1px solid var(--line);paddin
 <button class="print-btn" onclick="window.print()">🖨 Print / Save PDF</button>
 <div class="page">
   <div class="band">
-    <div><h1>${BRAND.name} — Imaging Report</h1><div class="sub">${esc(d["Study Description"] || study.modality + " study")}</div></div>
-    <div class="rt">${esc(d["Study Date"] || "")}<br>${study.series.length} series · ${study.imageIds.length} images</div>
+    <div><h1>${BRAND.name} — Imaging Report</h1><div class="sub">${esc(val("Study Description") || study.modality + " study")}</div></div>
+    <div class="rt">${esc(val("Study Date"))}<br>${study.series.length} series · ${study.imageIds.length} images</div>
   </div>
   <div class="body">
     <h2>Patient &amp; Study</h2>
@@ -830,26 +840,44 @@ function ExportModal({ seriesName, total, current, fps, onClose, onExport }: { s
   );
 }
 
-function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; initialFindings?: string; onClose: () => void; onSaved: () => void }) {
+function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", initialImpression = "", onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; initialFindings?: string; initialImpression?: string; onClose: () => void; onSaved: () => void }) {
   const d = study.dict;
-  const [patient, setPatient] = useState(d["Patient Name"] || "");
+  // all details, auto-filled from DICOM, fully editable
+  const [f, setF] = useState<Record<string, string>>({
+    "Patient Name": d["Patient Name"] || "", "Patient ID": d["Patient ID"] || "",
+    "Patient Sex": d["Patient Sex"] || "", "Patient Age": d["Patient Age"] || "",
+    "Patient Birth Date": d["Patient Birth Date"] || "", "Study Date": d["Study Date"] || "",
+    "Study Description": d["Study Description"] || "", "Referring Physician": d["Referring Physician"] || "",
+    "Accession #": d["Accession #"] || "",
+  });
+  const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
   const [history, setHistory] = useState("");
   const [technique, setTechnique] = useState(`${study.modality} study comprising ${study.series.length} series (${study.imageIds.length} images): ${study.series.map((s) => `${s.name} [${s.count}]`).join(", ")}.`);
   const [findings, setFindings] = useState(initialFindings);
-  const [impression, setImpression] = useState("");
-  const buildHtml = () => buildReportHtml(study, { patient, history, technique, findings, impression, snapshot, measurements, aiConnected: ai.connected });
-  function downloadHtml() { dlHtml(buildHtml(), `report-${study.name.replace(/\W+/g, "_")}.html`); onSaved(); }
+  const [impression, setImpression] = useState(initialImpression);
+  const buildHtml = () => buildReportHtml(study, { info: f, history, technique, findings, impression, snapshot, measurements, aiConnected: ai.connected });
+  function downloadHtml() { dlHtml(buildHtml(), `report-${(f["Patient Name"] || study.name).replace(/\W+/g, "_")}.html`); onSaved(); }
   function printReport() { printHtml(buildHtml()); }
+  const detailFields = ["Patient Name", "Patient ID", "Patient Sex", "Patient Age", "Study Date", "Study Description", "Referring Physician", "Accession #"];
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="flex max-h-[88vh] w-full max-w-2xl flex-col panel p-0">
-        <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5"><div className="flex items-center gap-2"><FileText className="h-4 w-4 text-medical-300" /><span className="text-sm font-semibold text-white">Structured Report — whole study</span></div><button onClick={onClose} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button></div>
+      <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="flex max-h-[90vh] w-full max-w-2xl flex-col panel p-0">
+        <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5"><div className="flex items-center gap-2"><FileText className="h-4 w-4 text-medical-300" /><span className="text-sm font-semibold text-white">Structured Report — editable</span></div><button onClick={onClose} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button></div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
-          <div className="flex gap-4">{snapshot && <img src={snapshot} alt="key" className="h-28 w-28 shrink-0 rounded-lg border border-white/10 object-contain" />}<div className="flex-1 text-xs text-slate-400"><div className="font-semibold text-slate-200">{d["Patient Name"] || study.name}</div><div>{study.modality} · {study.series.length} series · {study.imageIds.length} images</div>{measurements.length > 0 && <div className="mt-1 text-slate-300">{measurements.length} measurement(s) included</div>}{!ai.connected && <div className="mt-1 text-warn">AI not connected — findings entered manually.</div>}</div></div>
-          <L label="Patient / ID"><input value={patient} onChange={(e) => setPatient(e.target.value)} className={rin} /></L>
-          {[{ label: "Clinical history", v: history, set: setHistory, r: 2 }, { label: "Technique", v: technique, set: setTechnique, r: 2 }, { label: "Findings", v: findings, set: setFindings, r: 5 }, { label: "Impression", v: impression, set: setImpression, r: 3 }].map((s) => (<L key={s.label} label={s.label}><textarea value={s.v} onChange={(e) => s.set(e.target.value)} rows={s.r} className={rin} /></L>))}
+          <div className="flex gap-4">{snapshot && <img src={snapshot} alt="key" className="h-24 w-24 shrink-0 rounded-lg border border-white/10 object-contain" />}<div className="flex-1 text-xs text-slate-400"><div className="font-semibold text-slate-200">{f["Patient Name"] || study.name}</div><div>{study.modality} · {study.series.length} series · {study.imageIds.length} images</div>{measurements.length > 0 && <div className="mt-1 text-slate-300">{measurements.length} measurement(s) included</div>}<div className="mt-1 text-good">All fields below are editable — the report uses your edits.</div></div></div>
+          <div>
+            <label className="label-tiny">Patient &amp; study details</label>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              {detailFields.map((k) => (
+                <label key={k} className="block"><span className="text-[10px] text-slate-500">{k}</span>
+                  <input value={f[k] || ""} onChange={(e) => set(k, e.target.value)} className="mt-0.5 h-9 w-full rounded-lg border border-white/10 bg-navy-850 px-2.5 text-sm text-slate-200 outline-none focus:border-medical-500/50" />
+                </label>
+              ))}
+            </div>
+          </div>
+          {[{ label: "Clinical history", v: history, set: setHistory, r: 2 }, { label: "Technique", v: technique, set: setTechnique, r: 2 }, { label: "Findings", v: findings, set: setFindings, r: 6 }, { label: "Impression", v: impression, set: setImpression, r: 3 }].map((s) => (<L key={s.label} label={s.label}><textarea value={s.v} onChange={(e) => s.set(e.target.value)} rows={s.r} className={rin} /></L>))}
         </div>
-        <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-3.5"><button onClick={printReport} className="btn-ghost">Print / PDF</button><button onClick={downloadHtml} className="btn-primary"><Download className="h-4 w-4" /> Download report</button></div>
+        <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-3.5"><button onClick={printReport} className="btn-ghost">🖨 Print / PDF</button><button onClick={downloadHtml} className="btn-primary"><Download className="h-4 w-4" /> Download report</button></div>
       </motion.div>
     </motion.div>
   );
