@@ -16,9 +16,11 @@ Fast (GPU), free, and no Hugging Face token needed (uses the public `unsloth/med
    ```ini
    AI_PROVIDER=openai
    MEDGEMMA_ENDPOINT=https://xxxx.trycloudflare.com/v1/chat/completions
-   MEDGEMMA_MODEL=medgemma
+   MEDGEMMA_MODEL=medgemma1.5
    ```
    Restart the app (`npm run dev` / `start-all.bat`) → open a study → click **AI**.
+
+Uses Ollama's official **`medgemma1.5`** model, which is **vision-capable** (bundles the projector) — so it actually reads the images, not just text.
 
 ## Notes
 - **Keep the Colab tab open** — the endpoint lives only while the runtime runs, and the URL changes each session (paste the new one each time).
