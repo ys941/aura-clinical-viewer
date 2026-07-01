@@ -104,9 +104,19 @@ There's also an **"Aura Viewer"** desktop shortcut (points at `start-all.bat`). 
 
 Aura is a standard Next.js app — deploys to both in a couple of clicks. Set the [env vars](#-the-envlocal-situationship) in the host's dashboard (never commit secrets; `.env.local` is gitignored).
 
+<div align="center">
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/ys941/aura-clinical-viewer&env=NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,CLERK_SECRET_KEY,AI_PROVIDER,MEDGEMMA_NTFY_TOPIC,MEDGEMMA_MODEL&envDescription=Clerk%20keys%20%2B%20AI%20config&project-name=aura&repository-name=aura)
+&nbsp;&nbsp;
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.app/new)
+
+</div>
+
+> The buttons work for **you** (the repo owner) since the repo is private — you'll be asked to sign in / grant access and to enter the env vars.
+
 ### ▲ Vercel
-1. **Import** the repo at [vercel.com/new](https://vercel.com/new) (framework auto‑detects as Next.js).
-2. Add the env vars (Clerk + AI).
+1. Click **Deploy with Vercel** above (or **Import** at [vercel.com/new](https://vercel.com/new) — auto‑detects Next.js).
+2. Enter the env vars it prompts for (Clerk + AI).
 3. **Deploy.** Done — Vercel handles build + hosting.
    > ⏱ **Heads‑up:** MedGemma's first call cold‑starts (~1 min), which can exceed Vercel's serverless function timeout on the **Hobby** plan. On Vercel, prefer **`AI_PROVIDER=gemini`** (fast), or use Railway / a paid plan for the MedGemma path.
 
