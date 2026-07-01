@@ -5,8 +5,12 @@
   "scripts": {
     "dev": "next dev -p 4477",
     "build": "next build",
-    "start": "next start -p 4477",
+    "start": "next start",
+    "start:local": "next start -p 4477",
     "lint": "next lint"
+  },
+  "engines": {
+    "node": ">=18.18.0"
   },
   "dependencies": {
     "@clerk/nextjs": "^5.7.6",

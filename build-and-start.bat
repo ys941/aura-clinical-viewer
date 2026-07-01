@@ -26,7 +26,7 @@ if errorlevel 1 (
 echo.
 echo Starting production server... (close this window to stop)
 start "" /b cmd /c "timeout /t 4 /nobreak >nul & start http://localhost:4477/viewer"
-call npm run start
+call npm run start:local
 
 echo.
 echo Server stopped. Press any key to close.

@@ -100,6 +100,36 @@ There's also an **"Aura Viewer"** desktop shortcut (points at `start-all.bat`). 
 
 ---
 
+## ☁️ Ship it (Vercel / Railway)
+
+Aura is a standard Next.js app — deploys to both in a couple of clicks. Set the [env vars](#-the-envlocal-situationship) in the host's dashboard (never commit secrets; `.env.local` is gitignored).
+
+### ▲ Vercel
+1. **Import** the repo at [vercel.com/new](https://vercel.com/new) (framework auto‑detects as Next.js).
+2. Add the env vars (Clerk + AI).
+3. **Deploy.** Done — Vercel handles build + hosting.
+   > ⏱ **Heads‑up:** MedGemma's first call cold‑starts (~1 min), which can exceed Vercel's serverless function timeout on the **Hobby** plan. On Vercel, prefer **`AI_PROVIDER=gemini`** (fast), or use Railway / a paid plan for the MedGemma path.
+
+### 🚂 Railway
+1. **New Project → Deploy from GitHub repo** at [railway.app](https://railway.app).
+2. Add the env vars. Railway auto‑builds (Nixpacks) and runs `npm run build` → `npm run start`.
+3. The app binds to Railway's injected **`$PORT`** automatically (the `start` script is `next start`). No timeout issues — great for the **MedGemma** path.
+
+### Env vars to set (both hosts)
+
+```
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY   CLERK_SECRET_KEY
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/login          NEXT_PUBLIC_CLERK_SIGN_UP_URL=/signup
+NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL=/viewer
+NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL=/viewer
+AI_PROVIDER   MEDGEMMA_NTFY_TOPIC   MEDGEMMA_MODEL   (+ MEDGEMMA_ENDPOINT or GEMINI_API_KEY/GEMINI_MODEL)
+```
+
+> 🔐 Using **Clerk test keys** works anywhere. For a real production domain, add that domain in your Clerk dashboard (and switch to `pk_live`/`sk_live`).
+> 🩻 Imaging still runs **100% in the browser** even when hosted — the server only relays AI requests.
+
+---
+
 ## 🔑 The `.env.local` situationship
 
 Pop a `.env.local` in the project root:
