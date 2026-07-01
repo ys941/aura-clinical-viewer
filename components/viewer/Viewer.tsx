@@ -40,7 +40,7 @@ const WL_PRESETS = [
 ];
 const SHORTCUTS: [string, string][] = [
   ["↑ / ↓  or  ← / →", "Previous / next slice"],
-  ["Mouse wheel", "Zoom (toggle to slice-scroll)"],
+  ["Mouse wheel", "Scroll slices (toggle to zoom)"],
   ["+  /  −", "Zoom in / out"],
   ["Ctrl / ⌘ + C", "Copy current image"],
   ["Space", "Play / pause cine"],
@@ -63,7 +63,7 @@ export default function Viewer() {
   const cineRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const imgTagCache = useRef<Map<string, Record<string, string>>>(new Map());
   const toastSeq = useRef(0);
-  const wheelModeRef = useRef<"zoom" | "stack">("zoom");
+  const wheelModeRef = useRef<"zoom" | "stack">("stack");
 
   const [ready, setReady] = useState(false);
   const [study, setStudy] = useState<LoadedStudy | null>(null);
@@ -90,7 +90,7 @@ export default function Viewer() {
   const [imgTags, setImgTags] = useState<Record<string, string>>({});
   const [tagTab, setTagTab] = useState<"patient" | "all">("patient");
   const [tagSearch, setTagSearch] = useState("");
-  const [wheelMode, setWheelMode] = useState<"zoom" | "stack">("zoom");
+  const [wheelMode, setWheelMode] = useState<"zoom" | "stack">("stack");
   const [fullscreen, setFullscreen] = useState(false);
   const [showLeft, setShowLeft] = useState(true);
   const [showRight, setShowRight] = useState(true);
@@ -219,7 +219,7 @@ export default function Viewer() {
     (async () => {
       try { api.cornerstone.resize(el); } catch {}
       await displayIndex(0);
-      if (/CT/i.test(activeSeries.modality)) applyWL(400, 40);
+      applyDefaultWL();
       try { api.cornerstone.resize(el, true); api.cornerstone.fitToWindow(el); } catch {}
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -239,7 +239,8 @@ export default function Viewer() {
         try {
           const img = await api.cornerstone.loadAndCacheImage(s.imageIds[0]);
           api.cornerstone.displayImage(off, img);
-          if (/CT/i.test(s.modality)) { const vp = api.cornerstone.getViewport(off); vp.voi.windowWidth = 400; vp.voi.windowCenter = 40; api.cornerstone.setViewport(off, vp); }
+          const hasVoi = img.windowWidth > 1 && img.windowCenter != null && !isNaN(img.windowCenter);
+          if (/CT/i.test(s.modality) && !hasVoi) { const vp = api.cornerstone.getViewport(off); vp.voi.windowWidth = 400; vp.voi.windowCenter = 40; api.cornerstone.setViewport(off, vp); }
           try { api.cornerstone.fitToWindow(off); } catch {}
           api.cornerstone.updateImage(off);
           await new Promise((r) => requestAnimationFrame(() => r(null)));
@@ -307,13 +308,23 @@ export default function Viewer() {
   function selectTool(name: string) { const api = apiRef.current; if (!api) return; setActiveTool(name); try { api.cornerstoneTools.setToolActive(name, { mouseButtonMask: 1 }); } catch {} }
   function withViewport(fn: (vp: any) => void) { const api = apiRef.current, el = elRef.current; if (!api || !el) return; let vp; try { vp = api.cornerstone.getViewport(el); } catch { return; } if (!vp) return; fn(vp); api.cornerstone.setViewport(el, vp); }
   const applyWL = (ww: number, wc: number) => withViewport((vp) => { vp.voi.windowWidth = ww; vp.voi.windowCenter = wc; });
+  // Match other PACS: keep the image's embedded DICOM window; only fall back to a
+  // preset when the image carries no usable VOI (e.g. some CTs export without one).
+  function applyDefaultWL() {
+    const api = apiRef.current, el = elRef.current; if (!api || !el || !activeSeries) return;
+    try {
+      const img = api.cornerstone.getEnabledElement(el)?.image;
+      const hasVoi = !!img && img.windowWidth > 1 && img.windowCenter != null && !isNaN(img.windowCenter);
+      if (!hasVoi && /CT/i.test(activeSeries.modality)) applyWL(400, 40);
+    } catch {}
+  }
   const rotate = () => withViewport((vp) => (vp.rotation = (vp.rotation + 90) % 360));
   const flipH = () => withViewport((vp) => (vp.hflip = !vp.hflip));
   const flipV = () => withViewport((vp) => (vp.vflip = !vp.vflip));
   const invert = () => withViewport((vp) => (vp.invert = !vp.invert));
   const zoomBy = (f: number) => withViewport((vp) => (vp.scale = Math.max(0.05, vp.scale * f)));
   const setZoom = (pct: number) => withViewport((vp) => (vp.scale = Math.max(0.05, pct / 100)));
-  const reset = () => { const api = apiRef.current, el = elRef.current; if (api && el) { api.cornerstone.reset(el); if (activeSeries && /CT/i.test(activeSeries.modality)) applyWL(400, 40); } };
+  const reset = () => { const api = apiRef.current, el = elRef.current; if (api && el) { api.cornerstone.reset(el); applyDefaultWL(); } };
   const fit = () => { const api = apiRef.current, el = elRef.current; if (api && el) try { api.cornerstone.fitToWindow(el); } catch {} };
   const oneToOne = () => withViewport((vp) => (vp.scale = 1));
   function fill() {
