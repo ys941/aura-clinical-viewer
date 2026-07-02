@@ -504,13 +504,14 @@ export default function Viewer() {
     // into montage grids per view. To keep it one manageable request, the number of montage
     // IMAGES is bounded by densifying the grids for large studies — slices are never dropped.
     const N = study.imageIds.length;
-    const BUDGET = 12; // target montage images; grids get denser rather than skip slices
+    const BUDGET = 9;  // montage images per request — kept modest so it fits the model context (~256 tokens/image)
     let per = 16;      // slices per montage — start readable (4×4), pack denser if needed
     const montagesAt = (p: number) => order.reduce((a, k) => a + Math.max(1, Math.ceil(groups.get(k)!.idxs.length / p)), 0);
     if (montagesAt(per) > BUDGET) per = Math.max(16, Math.ceil(N / BUDGET));
     const cols = Math.ceil(Math.sqrt(per));
     const rows = Math.ceil(per / cols);
-    const tile = Math.max(96, Math.min(256, Math.floor(1024 / cols)));
+    // Keep each montage ≤ ~768px so the vision model tokenizes it to ~one 256-token image.
+    const tile = Math.max(96, Math.min(220, Math.floor(768 / cols)));
     const HEAD = 26;
 
     const off = document.createElement("div");

@@ -35,8 +35,9 @@ export async function POST(req: Request) {
   let body: any = {};
   try { body = await req.json(); } catch {}
 
-  // Whole study: the client tiles EVERY slice into montage grids. High guard only (never trims real studies).
-  const images: string[] = Array.isArray(body?.images) ? body.images.slice(0, 40) : [];
+  // Whole study: the client tiles EVERY slice into montage grids. Guard bounds the image count
+  // so the request fits the model context (~256 tokens/image; 24 ≈ 6k tokens < 8k num_ctx).
+  const images: string[] = Array.isArray(body?.images) ? body.images.slice(0, 24) : [];
   const views: string[] = Array.isArray(body?.views) ? body.views.map((v: any) => String(v)) : [];
   const study = { name: body?.name ?? "study", modality: body?.modality ?? "—", imageCount: body?.imageCount ?? 0, sampled: images.length };
   const viewList = views.length
@@ -103,29 +104,59 @@ async function gemini(study: any, userText: string, images: string[]) {
   return NextResponse.json({ connected: true, study, model, text: clean(text) });
 }
 
+function friendlyErr(t: string): string {
+  if (/context size|exceed_context/i.test(t)) return "The study was too large for the model's context window. Re-run the Colab notebook to reload the model, then retry — the app now requests a larger context automatically.";
+  return t.slice(0, 240);
+}
+
 async function openai(study: any, userText: string, images: string[]) {
   const endpoint = await resolveEndpoint();
   const model = process.env.MEDGEMMA_MODEL?.trim() || "medgemma";
   const token = process.env.HF_TOKEN?.trim();
+  // Whole-study montages need a bigger context than the model's 4096 default.
+  const numCtx = Math.max(4096, parseInt(process.env.MEDGEMMA_NUM_CTX || "8192", 10) || 8192);
   if (!endpoint) {
     return NextResponse.json({ connected: false, study, message: "MedGemma endpoint not found. Start the Colab notebook (it auto-publishes the endpoint), or set MEDGEMMA_ENDPOINT in .env.local." });
   }
-  // Send every montage — together they cover the whole study (no slices dropped).
-  const capped = images;
-  const content: any[] = [{ type: "text", text: userText }];
-  for (const u of capped) content.push({ type: "image_url", image_url: { url: u } });
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 290_000);
-  const r = await fetch(endpoint, {
-    method: "POST", headers, signal: controller.signal,
-    body: JSON.stringify({ model, messages: [{ role: "system", content: SYSTEM }, { role: "user", content: images.length ? content : userText }], max_tokens: 1200, temperature: 0.2, stream: false }),
-  });
-  clearTimeout(timer);
-  if (r.status === 503) return NextResponse.json({ connected: false, study, message: "Endpoint waking up (cold start). Wait ~1 min and retry." });
-  if (!r.ok) { const t = await r.text().catch(() => ""); return NextResponse.json({ connected: false, study, message: `Endpoint error ${r.status}. ${t.slice(0, 240)}` }); }
-  const data = await r.json();
-  const text = clean((data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "").trim());
-  return NextResponse.json({ connected: !!text, study, text: text || "(empty response)" });
+
+  // Ollama's native /api/chat lets us raise num_ctx so the whole study fits (the OpenAI-compat
+  // /v1 path is pinned to the model's default context). Fall back to /v1 for other servers.
+  const nativeUrl = endpoint.replace(/\/v1\/chat\/completions\/?$/, "/api/chat");
+  const isOllama = nativeUrl !== endpoint;
+  try {
+    if (isOllama) {
+      const imgs = images.map((u) => u.replace(/^data:[^;]+;base64,/, ""));
+      const r = await fetch(nativeUrl, {
+        method: "POST", headers, signal: controller.signal,
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "system", content: SYSTEM }, { role: "user", content: userText, images: imgs }],
+          stream: false,
+          options: { num_ctx: numCtx, temperature: 0.2, num_predict: 1200 },
+        }),
+      });
+      if (r.status === 503) return NextResponse.json({ connected: false, study, message: "Endpoint waking up (cold start). Wait ~1 min and retry." });
+      if (!r.ok) { const t = await r.text().catch(() => ""); return NextResponse.json({ connected: false, study, message: `Endpoint error ${r.status}. ${friendlyErr(t)}` }); }
+      const data = await r.json();
+      const text = clean((data?.message?.content || "").trim());
+      return NextResponse.json({ connected: !!text, study, text: text || "(empty response)" });
+    }
+
+    // Generic OpenAI-compatible vision endpoint (e.g. HF Space).
+    const content: any[] = [{ type: "text", text: userText }];
+    for (const u of images) content.push({ type: "image_url", image_url: { url: u } });
+    const r = await fetch(endpoint, {
+      method: "POST", headers, signal: controller.signal,
+      body: JSON.stringify({ model, messages: [{ role: "system", content: SYSTEM }, { role: "user", content: images.length ? content : userText }], max_tokens: 1200, temperature: 0.2, stream: false }),
+    });
+    if (r.status === 503) return NextResponse.json({ connected: false, study, message: "Endpoint waking up (cold start). Wait ~1 min and retry." });
+    if (!r.ok) { const t = await r.text().catch(() => ""); return NextResponse.json({ connected: false, study, message: `Endpoint error ${r.status}. ${friendlyErr(t)}` }); }
+    const data = await r.json();
+    const text = clean((data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "").trim());
+    return NextResponse.json({ connected: !!text, study, text: text || "(empty response)" });
+  } finally { clearTimeout(timer); }
 }
