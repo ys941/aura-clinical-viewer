@@ -64,11 +64,11 @@ export async function POST(req: Request) {
       return provider === "gemini" ? await gemini(study, userText, [], SYSTEM_SYNTH) : await openai(study, userText, [], SYSTEM_SYNTH);
     }
 
-    // ── Batch pass: analyse ONE batch of full-resolution montages (a portion of the study) ──
+    // ── Batch pass: analyse ONE batch of full-resolution images (a portion of the study) ──
     const images: string[] = Array.isArray(body?.images) ? body.images.slice(0, 12) : [];
     study.sampled = images.length;
     const userText =
-      `${historyLine}Modality: ${study.modality}. These ${images.length} montage image(s) show a portion of the study; each tile is one full-resolution slice and the small number on a tile is its image number. Record your draft observations by anatomical structure with image numbers, then the 'Key candidates:' line.`;
+      `${historyLine}Modality: ${study.modality}. The following ${images.length} medical image(s) are from the study. Some may be grids of several slices — where an image is a grid, the small number on each tile is that slice's image number. Record your draft observations by anatomical structure, citing image numbers, then a 'Key candidates:' line listing the images that best show any abnormality.`;
     return provider === "gemini" ? await gemini(study, userText, images) : await openai(study, userText, images);
   } catch (e: any) {
     const raw = String(e?.message || e);

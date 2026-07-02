@@ -43,6 +43,54 @@ function vec3(v: any): number[] | null {
   return null;
 }
 
+const raf = () => new Promise((r) => requestAnimationFrame(() => r(null)));
+
+// Render a slice (grayscale, DICOM window) into a size×size canvas.
+async function renderSlice(cs: any, off: HTMLElement, imageId: string, size: number, mainVp: any): Promise<HTMLCanvasElement> {
+  const img = await cs.loadAndCacheImage(imageId);
+  cs.displayImage(off, img);
+  if (mainVp) { const vp = cs.getViewport(off); vp.voi = { ...mainVp.voi }; vp.invert = mainVp.invert; cs.setViewport(off, vp); }
+  try { cs.fitToWindow(off); } catch {}
+  cs.updateImage(off);
+  await raf();
+  const src = off.querySelector("canvas") as HTMLCanvasElement;
+  const c = document.createElement("canvas"); c.width = size; c.height = size;
+  const ctx = c.getContext("2d")!; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, size, size);
+  ctx.drawImage(src, 0, 0, size, size);
+  return c;
+}
+
+// Render a CT slice using MedGemma's official 3-window→RGB preprocessing:
+// R = bone/lung (WW 2250 / WL -100), G = soft tissue (WW 350 / WL 40), B = brain (WW 80 / WL 40).
+async function renderCtRgb(cs: any, off: HTMLElement, imageId: string, size: number): Promise<HTMLCanvasElement> {
+  const img = await cs.loadAndCacheImage(imageId);
+  cs.displayImage(off, img);
+  const windows: [number, number][] = [[2250, -100], [350, 40], [80, 40]];
+  const lumas: Uint8ClampedArray[] = [];
+  for (const [ww, wc] of windows) {
+    const vp = cs.getViewport(off); vp.voi = { windowWidth: ww, windowCenter: wc }; vp.invert = false; cs.setViewport(off, vp);
+    try { cs.fitToWindow(off); } catch {}
+    cs.updateImage(off);
+    await raf();
+    const src = off.querySelector("canvas") as HTMLCanvasElement;
+    const tmp = document.createElement("canvas"); tmp.width = size; tmp.height = size;
+    const tctx = tmp.getContext("2d")!; tctx.fillStyle = "#000"; tctx.fillRect(0, 0, size, size);
+    tctx.drawImage(src, 0, 0, size, size);
+    lumas.push(tctx.getImageData(0, 0, size, size).data);
+  }
+  const out = document.createElement("canvas"); out.width = size; out.height = size;
+  const octx = out.getContext("2d")!; const od = octx.createImageData(size, size);
+  for (let i = 0; i < size * size; i++) { od.data[i * 4] = lumas[0][i * 4]; od.data[i * 4 + 1] = lumas[1][i * 4]; od.data[i * 4 + 2] = lumas[2][i * 4]; od.data[i * 4 + 3] = 255; }
+  octx.putImageData(od, 0, 0);
+  return out;
+}
+
+function stampNum(canvas: HTMLCanvasElement, n: number) {
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(0, 0, 42, 18);
+  ctx.fillStyle = "#7ce0ff"; ctx.font = "12px monospace"; ctx.fillText(String(n), 4, 13);
+}
+
 type KeyImage = { slice: number; view: string; caption: string; url: string };
 
 // Split the model's markdown into Technique / Findings / Impression by locating the
@@ -520,60 +568,76 @@ export default function Viewer() {
       }
     }
 
-    // WHOLE study — EVERY slice is included (nothing is sampled away). Slices are packed
-    // into montage grids per view. To keep it one manageable request, the number of montage
-    // IMAGES is bounded by densifying the grids for large studies — slices are never dropped.
-    // High-resolution montages: only a few slices per grid at large tiles, so the model sees
-    // fine detail. Every slice is tiled (no budget cap) — runAi sends these in batches and
-    // merges the results, so full-study coverage AND resolution are preserved.
-    const per = 9, cols = 3, rows = 3, tile = 300;
-    const HEAD = 26;
+    // MedGemma is a single-image, 896×896 model (strongest on 2D like chest X-ray). Match that:
+    //  • 2D / few-image studies (CXR, DX, US, derm, fundus, path, plain images) → send each image
+    //    at FULL 896 resolution (no grid). This is MedGemma's designed, best-performing input.
+    //  • Volumetric CT/MR (3D stacks) → cover slices in compact 2×2 grids (each tile 448 → 896),
+    //    and for CT apply the official 3-window→RGB preprocessing so bone/soft-tissue/brain are
+    //    all visible. Bigger tiles = far better per-slice detail than a dense grid.
+    const N = study.imageIds.length;
+    let planeHits = 0;
+    for (const k of order) if (!k.startsWith("S:")) planeHits += groups.get(k)!.idxs.length;
+    const volumetric = N > 6 && planeHits >= N * 0.5;
+    const isCT = /\bCT\b|CTA|CTCA|angio/i.test(`${study.modality} ${study.dict?.["Modality"] || ""}`);
 
     const off = document.createElement("div");
-    off.style.cssText = `position:fixed;left:-10000px;top:0;width:${tile}px;height:${tile}px;`;
+    off.style.cssText = `position:fixed;left:-10000px;top:0;width:896px;height:896px;`;
     document.body.appendChild(off);
     const images: string[] = [], labels: string[] = [];
     try {
       cs.enable(off);
       const mainVp = main ? cs.getViewport(main) : null;
       const ids = study.imageIds;
-      // Full plan: chunk every view's slices into montages of `per`, covering all slices.
-      const plans: { label: string; part: number; parts: number; slices: number[] }[] = [];
-      for (const k of order) {
-        const g = groups.get(k)!;
-        const parts = Math.max(1, Math.ceil(g.idxs.length / per));
-        for (let m = 0; m < parts; m++) plans.push({ label: g.label, part: m + 1, parts, slices: g.idxs.slice(m * per, (m + 1) * per) });
-      }
-      const totalTiles = plans.reduce((a, p) => a + p.slices.length, 0);
-      let done = 0;
-      setAiProgress({ done: 0, total: totalTiles, phase: "Rendering slices" });
 
-      for (const plan of plans) {
-        const canvas = document.createElement("canvas");
-        canvas.width = cols * tile; canvas.height = rows * tile + HEAD;
-        const ctx = canvas.getContext("2d")!;
-        ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = "#0b1220"; ctx.fillRect(0, 0, canvas.width, HEAD);
-        ctx.fillStyle = "#7ce0ff"; ctx.font = "bold 15px monospace";
-        const tag = plan.parts > 1 ? `${plan.label.toUpperCase()} (${plan.part}/${plan.parts})` : plan.label.toUpperCase();
-        ctx.fillText(`${tag}  ·  ${study.modality}`, 8, 18);
-
-        let ti = 0;
-        for (const gi of plan.slices) {
-          const img = await cs.loadAndCacheImage(ids[gi]);
-          cs.displayImage(off, img);
-          if (mainVp) { const vp = cs.getViewport(off); vp.voi = { ...mainVp.voi }; vp.invert = mainVp.invert; cs.setViewport(off, vp); }
-          try { cs.fitToWindow(off); } catch {}
-          cs.updateImage(off);
-          await new Promise((r) => requestAnimationFrame(() => r(null)));
-          const src = off.querySelector("canvas") as HTMLCanvasElement;
-          const cx = (ti % cols) * tile, cy = HEAD + Math.floor(ti / cols) * tile;
-          ctx.drawImage(src, cx, cy, tile, tile);
-          ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(cx, cy, 30, 14);
-          ctx.fillStyle = "#7ce0ff"; ctx.font = "10px monospace"; ctx.fillText(String(gi + 1), cx + 2, cy + 11);
-          ti++; setAiProgress({ done: ++done, total: totalTiles, phase: `Rendering ${plan.label}` });
+      if (!volumetric) {
+        // ── 2D path: one full-resolution 896 image per source image (sampled, up to 8) ──
+        const SIZE = 896, MAX_2D = 8;
+        const picks: { gi: number; label: string }[] = [];
+        for (const k of order) {
+          const g = groups.get(k)!; const n = g.idxs.length;
+          const take = Math.max(1, Math.min(n, Math.round((MAX_2D * n) / Math.max(1, N))));
+          for (let t = 0; t < take; t++) picks.push({ gi: g.idxs[Math.floor(((t + 0.5) * n) / take)], label: g.label });
         }
-        images.push(canvas.toDataURL("image/jpeg", 0.8)); labels.push(plan.label);
+        let done = 0;
+        setAiProgress({ done: 0, total: picks.length, phase: "Rendering images" });
+        for (const p of picks) {
+          const c = await renderSlice(cs, off, ids[p.gi], SIZE, mainVp);
+          if (picks.length > 1) stampNum(c, p.gi + 1);
+          images.push(c.toDataURL("image/jpeg", 0.92)); labels.push(p.label);
+          setAiProgress({ done: ++done, total: picks.length, phase: "Rendering images" });
+        }
+      } else {
+        // ── Volumetric CT/MR path: 2×2 grids (tile 448 → 896), every slice, CT = 3-window RGB ──
+        const per = 4, cols = 2, rows = 2, tile = 448, HEAD = 24;
+        const plans: { label: string; part: number; parts: number; slices: number[] }[] = [];
+        for (const k of order) {
+          const g = groups.get(k)!;
+          const parts = Math.max(1, Math.ceil(g.idxs.length / per));
+          for (let m = 0; m < parts; m++) plans.push({ label: g.label, part: m + 1, parts, slices: g.idxs.slice(m * per, (m + 1) * per) });
+        }
+        const totalTiles = plans.reduce((a, p) => a + p.slices.length, 0);
+        let done = 0;
+        setAiProgress({ done: 0, total: totalTiles, phase: isCT ? "Rendering slices (CT windows)" : "Rendering slices" });
+        for (const plan of plans) {
+          const canvas = document.createElement("canvas");
+          canvas.width = cols * tile; canvas.height = rows * tile + HEAD;
+          const ctx = canvas.getContext("2d")!;
+          ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = "#0b1220"; ctx.fillRect(0, 0, canvas.width, HEAD);
+          ctx.fillStyle = "#7ce0ff"; ctx.font = "bold 14px monospace";
+          const tag = plan.parts > 1 ? `${plan.label.toUpperCase()} (${plan.part}/${plan.parts})` : plan.label.toUpperCase();
+          ctx.fillText(`${tag}  ·  ${study.modality}`, 8, 17);
+          let ti = 0;
+          for (const gi of plan.slices) {
+            const t = isCT ? await renderCtRgb(cs, off, ids[gi], tile) : await renderSlice(cs, off, ids[gi], tile, mainVp);
+            const cx = (ti % cols) * tile, cy = HEAD + Math.floor(ti / cols) * tile;
+            ctx.drawImage(t, cx, cy, tile, tile);
+            ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(cx, cy, 32, 15);
+            ctx.fillStyle = "#7ce0ff"; ctx.font = "11px monospace"; ctx.fillText(String(gi + 1), cx + 3, cy + 11);
+            ti++; setAiProgress({ done: ++done, total: totalTiles, phase: `Rendering ${plan.label}` });
+          }
+          images.push(canvas.toDataURL("image/jpeg", 0.85)); labels.push(plan.label);
+        }
       }
     } catch (e) { console.warn("montage error", e); }
     finally { try { cs.disable(off); } catch {} off.remove(); }
@@ -1069,6 +1133,12 @@ function ExportModal({ seriesName, total, current, fps, onClose, onExport }: { s
 function AskHistoryModal({ study, onGo, onClose }: { study: LoadedStudy; onGo: (history: string) => void; onClose: () => void }) {
   const [h, setH] = useState("");
   const chips = ["Chest pain", "Trauma", "Fever / infection", "Follow-up", "Screening", "Shortness of breath", "Post-operative"];
+  const m = study.modality.toUpperCase();
+  const note = /X.?RAY|CR|DX|DR|MG|US|OP|SM|DERM|FUND/.test(m) || study.imageIds.length <= 4
+    ? "This is the model's strongest input type — read at full resolution."
+    : /CT|MR|MRI/.test(m)
+      ? "CT/MRI support is early (~60–65% on findings) — treat this as a second look, not a diagnosis."
+      : "Decision support only — verify against the full study.";
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} onClick={(e) => e.stopPropagation()} className="w-full max-w-md panel p-0">
@@ -1078,6 +1148,7 @@ function AskHistoryModal({ study, onGo, onClose }: { study: LoadedStudy; onGo: (
         </div>
         <div className="space-y-3 p-5">
           <p className="text-xs text-slate-400">Any <span className="text-slate-200">clinical history or indication</span>? It sharpens the Findings and Impression. You can skip this.</p>
+          <p className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] text-slate-400">{note}</p>
           <textarea autoFocus value={h} onChange={(e) => setH(e.target.value)} rows={3} placeholder="e.g. 54 y/o male, atypical chest pain, r/o CAD. Known diabetic."
             onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) onGo(h.trim()); }}
             className="w-full rounded-lg border border-white/10 bg-navy-850 p-2.5 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50" />
