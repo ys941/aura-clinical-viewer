@@ -31,6 +31,15 @@ const SYSTEM_SYNTH =
   "## Key Images\n- Slice <number>: <what it shows> — the most representative images from the drafts. Write '- None' if unremarkable.\n\n" +
   "Do NOT invent findings that are not in the drafts. If clinical history is provided, address it in the Impression. " + STYLE;
 
+// Used by the high-resolution confirmation pass: re-read the key images and finalize.
+const SYSTEM_REFINE =
+  "You are a radiologist finalizing a report. You are given a preliminary report plus the KEY images at FULL resolution. Examine those images carefully and produce the FINAL, corrected report in clean Markdown with EXACTLY these sections, same format as before:\n\n" +
+  "## Findings\nGrouped by ANATOMICAL STRUCTURE, one line per structure (e.g. '**Lungs:** …'). Correct, sharpen, or confirm the preliminary findings based on the closer look; keep everything the preliminary report got right; cite (image N) where it helps.\n\n" +
+  "## Impression\n1. Numbered clinical conclusions, most significant first.\n\n" +
+  "## Recommendations\n- 1–3 short next steps. '- Clinical correlation.' if none.\n\n" +
+  "## Key Images\n- Slice <number>: <what it shows>. '- None' if unremarkable.\n\n" +
+  "Do NOT invent findings not supported by the images. If clinical history is provided, address it in the Impression. " + STYLE;
+
 // Strip model control tokens, chain-of-thought, and anything that isn't the report.
 function clean(text: string): string {
   let t = text.replace(/<\/?unused\d+>/gi, "").replace(/<\/?(end_of_turn|start_of_turn|bos|eos|think|thinking)>/gi, "");
@@ -62,6 +71,16 @@ export async function POST(req: Request) {
         `${historyLine}Consolidate these ${notes.length} draft observation set(s) from ONE ${study.modality} study (${study.imageCount} images) into the single final report.\n\n` +
         notes.map((n, i) => `[Draft ${i + 1}]\n${n}`).join("\n\n");
       return provider === "gemini" ? await gemini(study, userText, [], SYSTEM_SYNTH) : await openai(study, userText, [], SYSTEM_SYNTH);
+    }
+
+    // ── Refine pass: re-read the KEY images at full resolution and finalize the report ──
+    if (body?.mode === "refine") {
+      const images: string[] = Array.isArray(body?.images) ? body.images.slice(0, 12) : [];
+      const prior = String(body?.priorReport || "").slice(0, 4000);
+      study.sampled = images.length;
+      const userText =
+        `${historyLine}Below is a preliminary ${study.modality} report. The ${images.length} image(s) that follow are the KEY images at FULL resolution. Examine them carefully and produce the FINAL report — correct or confirm the findings based on this closer look.\n\nPRELIMINARY REPORT:\n${prior}`;
+      return provider === "gemini" ? await gemini(study, userText, images, SYSTEM_REFINE) : await openai(study, userText, images, SYSTEM_REFINE);
     }
 
     // ── Batch pass: analyse ONE batch of full-resolution images (a portion of the study) ──

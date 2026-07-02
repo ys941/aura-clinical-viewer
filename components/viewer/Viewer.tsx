@@ -676,6 +676,33 @@ export default function Viewer() {
     return out;
   }
 
+  // Render the key/impression slices at FULL 896 resolution (CT = 3-window RGB) for a
+  // careful high-resolution second read by the model.
+  async function renderKeyFullRes(refs: { slice: number; view?: string }[]): Promise<{ images: string[]; labels: string[] }> {
+    const api = apiRef.current, main = elRef.current;
+    if (!api || !study || !refs.length) return { images: [], labels: [] };
+    const cs = api.cornerstone, ids = study.imageIds;
+    const isCT = /\bCT\b|CTA|CTCA|angio/i.test(`${study.modality} ${study.dict?.["Modality"] || ""}`);
+    const off = document.createElement("div");
+    off.style.cssText = `position:fixed;left:-10000px;top:0;width:896px;height:896px;`;
+    document.body.appendChild(off);
+    const images: string[] = [], labels: string[] = [];
+    try {
+      cs.enable(off);
+      const mainVp = main ? cs.getViewport(main) : null;
+      for (const r of refs) {
+        const gi = r.slice - 1;
+        if (gi < 0 || gi >= ids.length) continue;
+        const c = isCT ? await renderCtRgb(cs, off, ids[gi], 896) : await renderSlice(cs, off, ids[gi], 896, mainVp);
+        stampNum(c, r.slice);
+        images.push(c.toDataURL("image/jpeg", 0.92));
+        labels.push(r.view || planeOfImage(cs, ids[gi]) || "");
+      }
+    } catch (e) { console.warn("key full-res error", e); }
+    finally { try { cs.disable(off); } catch {} off.remove(); }
+    return { images, labels };
+  }
+
   // The AI asks for clinical history first (better, targeted report) — user can skip.
   function runAi() {
     if (!study || ai.loading) return;
@@ -709,9 +736,23 @@ export default function Viewer() {
       if (!notes.length) { setAiProgress(null); setAi({ loading: false, connected: false, message: lastError || "No findings returned. Is the AI model running? (check the health badge)" }); return; }
 
       // 3) Merge the batch notes into one final report.
-      setAiProgress({ done: batches, total: batches + 1, phase: notes.length > 1 ? "Synthesizing report" : "Formatting report" });
+      setAiProgress({ done: batches, total: batches + 2, phase: notes.length > 1 ? "Synthesizing report" : "Formatting report" });
       const sdata = await post({ mode: "synthesize", ...meta, notes });
-      const finalText: string = (sdata?.connected && sdata?.text) ? sdata.text : notes.join("\n\n");
+      let finalText: string = (sdata?.connected && sdata?.text) ? sdata.text : notes.join("\n\n");
+
+      // 4) High-resolution confirmation pass — re-read the impression/key slices at full 896
+      //    (CT = 3-window RGB) and let the model correct/confirm the report on a closer look.
+      const keyRefs = parseKeyImageRefs(finalText);
+      if (keyRefs.length) {
+        setAiProgress({ done: batches + 1, total: batches + 2, phase: `Re-reading ${keyRefs.length} key image(s) at high resolution` });
+        try {
+          const kf = await renderKeyFullRes(keyRefs);
+          if (kf.images.length) {
+            const rdata = await post({ mode: "refine", ...meta, priorReport: finalText, views: kf.labels, images: kf.images });
+            if (rdata?.connected && rdata?.text) finalText = rdata.text;
+          }
+        } catch { /* keep the synthesized report if the refine pass fails */ }
+      }
 
       const cv = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
       setSnapshot(cv ? cv.toDataURL("image/png") : "");
@@ -720,13 +761,13 @@ export default function Viewer() {
       setReportFindings(parts.findings || finalText);
       setReportImpression(parts.impression);
       setReportRecs(parts.recommendations);
-      // 4) Capture the exact slices the report called out as "Key Images".
-      setAiProgress({ done: batches + 1, total: batches + 1, phase: "Capturing key images" });
+      // 5) Capture the exact slices the final report called out as "Key Images".
+      setAiProgress({ done: batches + 2, total: batches + 2, phase: "Capturing key images" });
       try { setKeyImages(await renderKeyImages(parseKeyImageRefs(finalText))); } catch { setKeyImages([]); }
       setAiProgress(null);
       setAi({ loading: false, connected: true, text: finalText });
       setShowReport(true); // auto-open the beautiful, editable report
-      toast(`AI analysis complete — ${batches} batch${batches > 1 ? "es" : ""} · report ready`);
+      toast(`AI analysis complete — ${batches} batch${batches > 1 ? "es" : ""} + high-res recheck · report ready`);
     } catch (e: any) { setAiProgress(null); setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
   }
 
