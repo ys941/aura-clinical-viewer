@@ -14,7 +14,7 @@ export const maxDuration = 300;
 
 // Shared style rules — the output must read like a radiologist wrote it, with zero meta-talk.
 const STYLE =
-  "STYLE RULES (mandatory): Write in formal radiology-report language. NEVER mention montages, tiles, grids, banners, batches, notes, sampling, views provided, image quality of the montage, or that you are an AI. Never describe HOW the images were given to you. Never output a Technique section, headers other than those requested, disclaimers, or 'Note:' lines. Refer to a location as (image N) only where a citation genuinely helps. No reasoning, no special tokens.";
+  "STYLE RULES (mandatory): Write in formal radiology-report language. NEVER mention montages, tiles, grids, banners, batches, notes, sampling, views provided, image quality of the montage, or that you are an AI. Never describe HOW the images were given to you. Never output a Technique section, a Discussion / Sample Report / Teaching / Education / Differential / Notes section, headers other than those requested, disclaimers, hyperlinks, or 'Note:' lines. NEVER show your reasoning, planning, drafts, or self-review — output only the finished report, starting directly at the first heading. Refer to a location as (image N) only where a citation genuinely helps. No special tokens.";
 
 const SYSTEM =
   "You are a radiologist reviewing part of an imaging study.\n" +
@@ -31,12 +31,16 @@ const SYSTEM_SYNTH =
   "## Key Images\n- Slice <number>: <what it shows> — the most representative images from the drafts. Write '- None' if unremarkable.\n\n" +
   "Do NOT invent findings that are not in the drafts. If clinical history is provided, address it in the Impression. " + STYLE;
 
-// Strip model control / chain-of-thought tokens (e.g. MedGemma's <unused94> thought …).
+// Strip model control tokens, chain-of-thought, and anything that isn't the report.
 function clean(text: string): string {
-  let t = text.replace(/<\/?unused\d+>/gi, "").replace(/<\/?(end_of_turn|start_of_turn|bos|eos)>/gi, "");
-  // drop a leading "thought" reasoning preamble before the first real heading/section
-  const cut = t.search(/(^|\n)\s*(#+\s*(Technique|Findings)|\*{0,2}(Technique|Findings)\b)/i);
-  if (cut > 0 && /thought/i.test(t.slice(0, cut))) t = t.slice(cut);
+  let t = text.replace(/<\/?unused\d+>/gi, "").replace(/<\/?(end_of_turn|start_of_turn|bos|eos|think|thinking)>/gi, "");
+  // reports never contain hyperlinks — keep the label only
+  t = t.replace(/\[([^\]\n]+)\]\([^)\n]*\)/g, "$1");
+  // put any mid-line section heading on its own line so we can locate the real report
+  t = t.replace(/([^\n])[ \t]*(#{1,4}[ \t]*(?:Technique|Findings|Impression|Diagnosis|Conclusion|Recommendation|Advice|Key[ \t]*Image)\b)/gi, "$1\n$2");
+  // drop a chain-of-thought preamble before the first real heading
+  const first = t.search(/(^|\n)[ \t]*#{1,4}[ \t]*(Technique|Findings|Impression|Diagnosis|Conclusion)\b/i);
+  if (first > 0 && /\b(thought|thinking|the user wants|i need to|i will|let me|drafting|consolidat|final review|looks good|i'?ll assume|okay,? |first,? i)\b/i.test(t.slice(0, first))) t = t.slice(first);
   return t.trim();
 }
 
@@ -147,7 +151,8 @@ async function openai(study: any, userText: string, images: string[], system: st
           model,
           messages: [{ role: "system", content: system }, { role: "user", content: userText, images: imgs }],
           stream: false,
-          options: { num_ctx: numCtx, temperature: 0.2, num_predict: 1200 },
+          think: false, // suppress chain-of-thought (ignored by models that don't support it)
+          options: { num_ctx: numCtx, temperature: 0.15, num_predict: 1300 },
         }),
       });
       if (r.status === 503) return NextResponse.json({ connected: false, study, message: "Endpoint waking up (cold start). Wait ~1 min and retry." });

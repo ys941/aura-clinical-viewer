@@ -48,16 +48,32 @@ type KeyImage = { slice: number; view: string; caption: string; url: string };
 // Split the model's markdown into Technique / Findings / Impression by locating the
 // section headings and slicing between them (tolerant of "## H" or "**H**"). The Key
 // Images section is dropped from the prose — it is rendered as a thumbnail gallery.
+// Extract ONLY real report sections. Any heading that sits alone on its line and is a known
+// junk section (Discussion / Sample Report / Notes / reasoning …) acts as a boundary and its
+// content is dropped, so teaching text and chain-of-thought can never leak into the report.
+// Anatomical sub-labels like "**Lungs:** …" are inline (content follows), so they stay as text.
+const KEEP_SECTIONS: Record<string, string> = {
+  technique: "technique", findings: "findings",
+  impression: "impression", diagnosis: "impression", conclusion: "impression", opinion: "impression",
+  recommendation: "recommendations", recommendations: "recommendations", advice: "recommendations",
+  "key images": "key images", "key image": "key images", "key candidates": "key images",
+};
+const JUNK_SECTIONS = new Set(["discussion", "sample report", "teaching", "teaching point", "teaching points", "education", "educational", "notes", "note", "differential", "differential diagnosis", "comment", "comments", "reasoning", "thought", "thoughts", "analysis", "draft", "plan", "review", "explanation"]);
 function splitAiReport(text: string): { technique: string; findings: string; impression: string; recommendations: string } {
-  const re = /(^|\n)\s*(?:#{1,4}\s*)?\**\s*(technique|findings|impression|recommendations?|advice|key\s*images?)\s*\**\s*:?\s*/gi;
-  const pos: { name: string; start: number; contentStart: number }[] = [];
+  const re = /(?:^|\n)[ \t]*(?:#{1,4}[ \t]*)?(?:\*\*)?[ \t]*([A-Za-z][A-Za-z /&]{1,26}?)[ \t]*(?:\*\*)?[ \t]*:?[ \t]*(?=\n|$)/g;
+  const marks: { at: number; end: number; keep: string | null }[] = [];
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) pos.push({ name: m[2].toLowerCase().replace(/\s+/g, " "), start: m.index, contentStart: re.lastIndex });
+  while ((m = re.exec(text))) {
+    const name = m[1].trim().toLowerCase().replace(/\s+/g, " ");
+    if (KEEP_SECTIONS[name]) marks.push({ at: m.index, end: re.lastIndex, keep: KEEP_SECTIONS[name] });
+    else if (JUNK_SECTIONS.has(name)) marks.push({ at: m.index, end: re.lastIndex, keep: null });
+  }
   const sec: Record<string, string> = {};
-  for (let i = 0; i < pos.length; i++) {
-    const p = pos[i], next = pos[i + 1];
-    const key = p.name.startsWith("key") ? "key images" : p.name.startsWith("recommendation") || p.name === "advice" ? "recommendations" : p.name;
-    sec[key] = text.slice(p.contentStart, next ? next.start : text.length).trim();
+  const tidy = (s: string) => s.replace(/^[ \t]*#{1,4}[ \t]*\n/gm, "").replace(/\n[ \t]*#{1,4}[ \t]*$/g, "").trim();
+  for (let i = 0; i < marks.length; i++) {
+    const mk = marks[i], next = marks[i + 1];
+    const content = tidy(text.slice(mk.end, next ? next.at : text.length));
+    if (mk.keep) sec[mk.keep] = content; // last occurrence wins (the real report follows any reasoning)
   }
   const technique = sec["technique"] || "";
   let findings = sec["findings"] || "";
@@ -904,7 +920,8 @@ function buildReportHtml(study: LoadedStudy, o: ReportOpts): string {
   const snapshot = o.snapshot || "";
   const keyImages = o.keyImages || [];
   const history = o.history || "";
-  const technique = o.technique || `${study.modality} study — ${study.imageIds.length} images across ${study.series.length} view(s).`;
+  // Technique only if genuinely provided (real reports omit it for plain radiographs).
+  const technique = (o.technique || "").trim();
   const impression = o.impression || "";
   const findings = o.findings || "";
   const esc = (s: string) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]!));
@@ -914,7 +931,7 @@ function buildReportHtml(study: LoadedStudy, o: ReportOpts): string {
     let html = "", inList = false;
     const closeList = () => { if (inList) { html += "</ul>"; inList = false; } };
     for (const raw of lines) {
-      const line = raw.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`(.+?)`/g, "<code>$1</code>");
+      const line = raw.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`(.+?)`/g, "<code>$1</code>");
       const h = line.match(/^\s*(#{1,4})\s+(.*)$/);
       const li = line.match(/^\s*[-*]\s+(.*)$/);
       if (h) { closeList(); html += `<h3>${h[2].replace(/[:#]+$/, "")}</h3>`; }
@@ -986,7 +1003,7 @@ p{margin:4px 0}
   ${ptTable}
   <div class="title">${esc(examTitle)}</div>
   ${history ? `<div class="sect"><h2>Clinical History</h2><div class="sec">${esc(history)}</div></div>` : ""}
-  <div class="sect"><h2>Technique</h2><div class="sec">${esc(technique)}</div></div>
+  ${technique ? `<div class="sect"><h2>Technique</h2><div class="sec">${esc(technique)}</div></div>` : ""}
   ${comparison ? `<div class="sect"><h2>Comparison</h2><div class="sec">${esc(comparison)}</div></div>` : ""}
   <div class="sect"><h2>Findings</h2>${findingsHtml}</div>
   ${meas}
@@ -1092,7 +1109,7 @@ function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", 
   });
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
   const [history, setHistory] = useState(initialHistory);
-  const [technique, setTechnique] = useState(initialTechnique || `${study.modality} study — ${study.imageIds.length} images across ${study.series.length} view(s).`);
+  const [technique, setTechnique] = useState(initialTechnique || "");
   const [comparison, setComparison] = useState("");
   const [findings, setFindings] = useState(initialFindings);
   const [impression, setImpression] = useState(initialImpression);
