@@ -71,9 +71,9 @@ function splitAiReport(text: string): { technique: string; findings: string; imp
 function parseKeyImageRefs(text: string): { slice: number; view?: string; caption?: string }[] {
   const out: { slice: number; view?: string; caption?: string }[] = [];
   const seen = new Set<number>();
-  const kiIdx = text.search(/#{0,4}\s*\**\s*key\s*images?\b/i);
+  const kiIdx = text.search(/#{0,4}\s*\**\s*key\s*(images?|candidates?)\b/i);
   const scope = kiIdx >= 0 ? text.slice(kiIdx) : text;
-  const re = /(?:^|\n)\s*[-*]?\s*(?:key\s*)?slice\s*#?\s*(\d+)\s*(?:\(([^)]*)\))?\s*[:\-–]?\s*([^\n]*)/gi;
+  const re = /(?:^|\n)\s*[-*]?\s*(?:key\s*)?(?:slice|image)\s*#?\s*(\d+)\s*(?:\(([^)]*)\))?\s*[:\-–]?\s*([^\n]*)/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(scope)) && out.length < 8) {
     const slice = parseInt(m[1], 10);
@@ -81,8 +81,8 @@ function parseKeyImageRefs(text: string): { slice: number; view?: string; captio
     seen.add(slice);
     out.push({ slice, view: (m[2] || "").trim() || undefined, caption: (m[3] || "").trim() || undefined });
   }
-  if (!out.length) { // fallback: any "slice N" mentions anywhere
-    const re2 = /slice\s*#?\s*(\d+)/gi; let x: RegExpExecArray | null;
+  if (!out.length) { // fallback: any "slice N" / "image N" mentions anywhere
+    const re2 = /(?:slice|image)\s*#?\s*(\d+)/gi; let x: RegExpExecArray | null;
     while ((x = re2.exec(text)) && out.length < 6) { const s = parseInt(x[1], 10); if (s && !seen.has(s)) { seen.add(s); out.push({ slice: s }); } }
   }
   return out;
@@ -153,6 +153,8 @@ export default function Viewer() {
   const [reportImpression, setReportImpression] = useState("");
   const [reportTechnique, setReportTechnique] = useState("");
   const [reportRecs, setReportRecs] = useState("");
+  const [reportHistory, setReportHistory] = useState("");
+  const [askAi, setAskAi] = useState(false);
   const [snapshot, setSnapshot] = useState("");
   const [keyImages, setKeyImages] = useState<KeyImage[]>([]);
   const [exporting, setExporting] = useState<number | null>(null);
@@ -594,15 +596,22 @@ export default function Viewer() {
     return out;
   }
 
-  async function runAi() {
+  // The AI asks for clinical history first (better, targeted report) — user can skip.
+  function runAi() {
+    if (!study || ai.loading) return;
+    setAskAi(true);
+  }
+
+  async function startAnalysis(history: string) {
     if (!study) return;
+    setReportHistory(history);
     setAi({ loading: true }); setAiProgress({ done: 0, total: 1, phase: "Preparing" });
     try {
       // 1) Render every slice into high-resolution montages (grouped by view).
       const { images, labels } = await buildStudyMontages();
       if (!images.length) { setAiProgress(null); setAi({ loading: false, connected: false, message: "Couldn't render the study." }); return; }
 
-      const meta = { name: study.name, modality: study.modality, imageCount: study.imageIds.length, seriesCount: study.series.length };
+      const meta = { name: study.name, modality: study.modality, imageCount: study.imageIds.length, seriesCount: study.series.length, history };
       const post = (payload: any) => fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then((r) => r.json());
 
       // 2) Analyze in batches (few images each) so every slice is read at full detail.
@@ -641,7 +650,7 @@ export default function Viewer() {
     } catch (e: any) { setAiProgress(null); setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
   }
 
-  function openReport(findings = "") { setReportFindings(findings); setReportImpression(""); setReportTechnique(""); setReportRecs(""); setKeyImages([]); const canvas = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null; setSnapshot(canvas ? canvas.toDataURL("image/png") : ""); setShowReport(true); }
+  function openReport(findings = "") { setReportFindings(findings); setReportImpression(""); setReportTechnique(""); setReportRecs(""); setReportHistory(""); setKeyImages([]); const canvas = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null; setSnapshot(canvas ? canvas.toDataURL("image/png") : ""); setShowReport(true); }
 
   // ───────── empty state ─────────
   if (study === null) {
@@ -836,7 +845,8 @@ export default function Viewer() {
           onCopy={() => { navigator.clipboard?.writeText(ai.text || ""); toast("Findings copied"); }}
           onReport={() => { setShowAiResult(false); openReport(ai.text || ""); }} />
       )}</AnimatePresence>
-      <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} initialFindings={reportFindings} initialImpression={reportImpression} initialTechnique={reportTechnique} initialRecs={reportRecs} keyImages={keyImages} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
+      <AnimatePresence>{askAi && study && <AskHistoryModal study={study} onGo={(h) => { setAskAi(false); startAnalysis(h); }} onClose={() => setAskAi(false)} />}</AnimatePresence>
+      <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} initialFindings={reportFindings} initialImpression={reportImpression} initialTechnique={reportTechnique} initialRecs={reportRecs} initialHistory={reportHistory} keyImages={keyImages} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
       <AnimatePresence>{showExport && activeSeries && <ExportModal seriesName={activeSeries.name} total={total} current={index + 1} fps={fps} onClose={() => setShowExport(false)} onExport={exportRun} />}</AnimatePresence>
     </div>
   );
@@ -1038,10 +1048,39 @@ function ExportModal({ seriesName, total, current, fps, onClose, onExport }: { s
   );
 }
 
+// Pre-analysis question: clinical history sharpens the read; fully skippable.
+function AskHistoryModal({ study, onGo, onClose }: { study: LoadedStudy; onGo: (history: string) => void; onClose: () => void }) {
+  const [h, setH] = useState("");
+  const chips = ["Chest pain", "Trauma", "Fever / infection", "Follow-up", "Screening", "Shortness of breath", "Post-operative"];
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} onClick={(e) => e.stopPropagation()} className="w-full max-w-md panel p-0">
+        <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
+          <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-teal-300" /><span className="text-sm font-semibold text-white">Before I read this {study.modality} study…</span></div>
+          <button onClick={onClose} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button>
+        </div>
+        <div className="space-y-3 p-5">
+          <p className="text-xs text-slate-400">Any <span className="text-slate-200">clinical history or indication</span>? It sharpens the Findings and Impression. You can skip this.</p>
+          <textarea autoFocus value={h} onChange={(e) => setH(e.target.value)} rows={3} placeholder="e.g. 54 y/o male, atypical chest pain, r/o CAD. Known diabetic."
+            onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) onGo(h.trim()); }}
+            className="w-full rounded-lg border border-white/10 bg-navy-850 p-2.5 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50" />
+          <div className="flex flex-wrap gap-1.5">
+            {chips.map((c) => <button key={c} onClick={() => setH((v) => (v ? `${v}; ${c}` : c))} className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-300 hover:bg-teal-500/10 hover:text-teal-300">{c}</button>)}
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-3.5">
+          <button onClick={() => onGo("")} className="btn-ghost">Skip — analyze without history</button>
+          <button onClick={() => onGo(h.trim())} disabled={!h.trim()} className="btn-primary disabled:opacity-50"><Sparkles className="h-4 w-4" /> Analyze</button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 const PREFS_KEY = "aura-report-prefs";
 function loadPrefs(): Record<string, string> { try { return JSON.parse(localStorage.getItem(PREFS_KEY) || "{}"); } catch { return {}; } }
 
-function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", initialImpression = "", initialTechnique = "", initialRecs = "", keyImages = [], onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; initialFindings?: string; initialImpression?: string; initialTechnique?: string; initialRecs?: string; keyImages?: KeyImage[]; onClose: () => void; onSaved: () => void }) {
+function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", initialImpression = "", initialTechnique = "", initialRecs = "", initialHistory = "", keyImages = [], onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; initialFindings?: string; initialImpression?: string; initialTechnique?: string; initialRecs?: string; initialHistory?: string; keyImages?: KeyImage[]; onClose: () => void; onSaved: () => void }) {
   const d = study.dict;
   // all details, auto-filled from DICOM, fully editable
   const [f, setF] = useState<Record<string, string>>({
@@ -1052,7 +1091,7 @@ function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", 
     "Accession #": d["Accession #"] || "",
   });
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
-  const [history, setHistory] = useState("");
+  const [history, setHistory] = useState(initialHistory);
   const [technique, setTechnique] = useState(initialTechnique || `${study.modality} study — ${study.imageIds.length} images across ${study.series.length} view(s).`);
   const [comparison, setComparison] = useState("");
   const [findings, setFindings] = useState(initialFindings);

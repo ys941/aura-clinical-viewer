@@ -12,26 +12,24 @@ export const maxDuration = 300;
 //       MEDGEMMA_ENDPOINT=https://…/v1/chat/completions
 //       MEDGEMMA_MODEL=medgemma     HF_TOKEN=hf_… (if private)
 
+// Shared style rules — the output must read like a radiologist wrote it, with zero meta-talk.
+const STYLE =
+  "STYLE RULES (mandatory): Write in formal radiology-report language. NEVER mention montages, tiles, grids, banners, batches, notes, sampling, views provided, image quality of the montage, or that you are an AI. Never describe HOW the images were given to you. Never output a Technique section, headers other than those requested, disclaimers, or 'Note:' lines. Refer to a location as (image N) only where a citation genuinely helps. No reasoning, no special tokens.";
+
 const SYSTEM =
-  "You are a radiologist producing a structured report from an imaging study.\n" +
-  "You are given montage images — EACH montage is ONE view/plane of the study, and its top banner names the view (e.g. AXIAL, CORONAL, SAGITTAL, or 'VIEW N' when the plane is not encoded in the data). Each tile inside a montage is a slice sampled across that view; the small cyan number on a tile is that slice's index in the study.\n\n" +
-  "Read every tile of every view. Do NOT rely on or invent series names — identify each view from its banner (and for 'VIEW N', identify the projection/plane yourself from the image, e.g. frontal/PA, lateral, oblique). Then write a concise, professional report in clean Markdown with EXACTLY these sections:\n\n" +
-  "## Technique\n- One line: the modality and the views/planes provided.\n\n" +
-  "## Findings\nOrganize findings BY VIEW. For each view present, use a bold sub-label and describe what that view shows, citing slice numbers where relevant:\n- **Axial:** …\n- **Coronal:** …\n- **Sagittal:** …\n(For radiographs/other, use the projection you identify, e.g. **Frontal:**, **Lateral:**.) Be systematic; note normal structures and any abnormality with its location and slice number.\n\n" +
-  "## Impression\n- 1–3 numbered, concise clinical takeaways.\n\n" +
-  "## Recommendations\n- 1–3 short, actionable next steps (correlation, follow-up imaging, referral). Write '- Clinical correlation.' if nothing specific.\n\n" +
-  "## Key Images\nList ONLY the slice numbers that best demonstrate the findings/impression, one per line, as:\n- Slice <number> (<view>): <what it shows>\nUse the exact slice numbers printed on the tiles. If the study is unremarkable, write '- None'.\n\n" +
-  "Rules: only sampled slices were reviewed — say so. This is clinical decision support, not a diagnosis. Output ONLY these sections — no reasoning, no special tokens.";
+  "You are a radiologist reviewing part of an imaging study.\n" +
+  "Input: montage images — each is a grid of slices from one plane (the banner names the plane; the small cyan number on a tile is that slice's image number in the study).\n\n" +
+  "Record your observations the way a radiologist drafts them: grouped by ANATOMICAL STRUCTURE / organ system (not by plane), each as '**Structure:** finding (image N).' Include pertinent normals briefly. Identify the plane/projection yourself from the images when needed. End with a line 'Key candidates: image N (reason), …' listing the slices that best show any abnormality (or 'Key candidates: none').\n\n" +
+  STYLE;
 
 // Used by the synthesis pass: merge several partial notes into ONE final report.
 const SYSTEM_SYNTH =
-  "You are a radiologist writing the FINAL report for an imaging study by consolidating several partial notes (each note reviewed a different set of full-resolution slices). Merge them into ONE clean report in Markdown with EXACTLY these sections:\n\n" +
-  "## Technique\n- modality + the views/planes covered.\n\n" +
-  "## Findings\nGrouped BY VIEW (Axial/Coronal/Sagittal, or the projection), with bold sub-labels, citing slice numbers. Merge duplicate findings across notes and keep the most specific wording.\n\n" +
-  "## Impression\n- 1–4 numbered clinical takeaways.\n\n" +
-  "## Recommendations\n- 1–3 short, actionable next steps (correlation, follow-up imaging, referral). Write '- Clinical correlation.' if nothing specific.\n\n" +
-  "## Key Images\n- Slice <number> (<view>): <what it shows> — the most representative slices drawn from the notes. Write '- None' if unremarkable.\n\n" +
-  "Rules: do NOT invent findings that are not in the notes; note that only the reviewed slices were seen; this is decision support, not a diagnosis. Output ONLY these sections — no reasoning, no special tokens.";
+  "You are a radiologist writing the FINAL report for an imaging study by consolidating draft observations (each draft covered a different portion of the study). Merge them into ONE definitive report in clean Markdown with EXACTLY these sections:\n\n" +
+  "## Findings\nOrganized by ANATOMICAL STRUCTURE / organ system, exactly like a formal radiology report — one line or short paragraph per structure, in this style:\n**Lungs:** No focal consolidation. …\n**Heart:** Normal in size. …\nCover every structure mentioned in the drafts, merge duplicates keeping the most specific wording, include pertinent normals, and cite (image N) only where it helps.\n\n" +
+  "## Impression\n1. Numbered, concise clinical conclusions — most significant first.\n\n" +
+  "## Recommendations\n- 1–3 short, actionable next steps. Write '- Clinical correlation.' if nothing specific.\n\n" +
+  "## Key Images\n- Slice <number>: <what it shows> — the most representative images from the drafts. Write '- None' if unremarkable.\n\n" +
+  "Do NOT invent findings that are not in the drafts. If clinical history is provided, address it in the Impression. " + STYLE;
 
 // Strip model control / chain-of-thought tokens (e.g. MedGemma's <unused94> thought …).
 function clean(text: string): string {
@@ -48,25 +46,25 @@ export async function POST(req: Request) {
 
   const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase();
   const study = { name: body?.name ?? "study", modality: body?.modality ?? "—", imageCount: body?.imageCount ?? 0, sampled: 0 };
+  const history = String(body?.history || "").trim().slice(0, 600);
+  const historyLine = history ? `Clinical history: ${history}\n` : "";
 
   try {
-    // ── Synthesis pass: merge partial per-batch notes into ONE final report (text only) ──
+    // ── Synthesis pass: merge partial per-batch drafts into ONE final report (text only) ──
     if (body?.mode === "synthesize") {
       const notes: string[] = Array.isArray(body?.notes) ? body.notes.map((n: any) => String(n)).filter(Boolean) : [];
       if (!notes.length) return NextResponse.json({ connected: false, study, message: "Nothing to synthesize — no batch notes were produced." });
       const userText =
-        `You are consolidating ${notes.length} partial radiology note(s) from ONE ${study.modality} study (each note covered a different set of full-resolution slices; ${study.imageCount} images total). Merge them into a single final report — deduplicate repeated findings, keep the slice numbers, and organise Findings by view.\n\n` +
-        notes.map((n, i) => `----- Notes ${i + 1} -----\n${n}`).join("\n\n");
+        `${historyLine}Consolidate these ${notes.length} draft observation set(s) from ONE ${study.modality} study (${study.imageCount} images) into the single final report.\n\n` +
+        notes.map((n, i) => `[Draft ${i + 1}]\n${n}`).join("\n\n");
       return provider === "gemini" ? await gemini(study, userText, [], SYSTEM_SYNTH) : await openai(study, userText, [], SYSTEM_SYNTH);
     }
 
     // ── Batch pass: analyse ONE batch of full-resolution montages (a portion of the study) ──
     const images: string[] = Array.isArray(body?.images) ? body.images.slice(0, 12) : [];
-    const views: string[] = Array.isArray(body?.views) ? body.views.map((v: any) => String(v)) : [];
     study.sampled = images.length;
-    const viewList = views.length ? views.map((v, i) => `montage ${i + 1} = ${v} view`).join("; ") : `${images.length} montage(s)`;
     const userText =
-      `Modality: ${study.modality}. These ${images.length} montage image(s) show a PORTION of the study, grouped by view (${viewList}). Each tile is one full-resolution slice; the small number on a tile is its slice index. Describe ONLY what is visible in these montages — findings per view with slice numbers, and note which slice numbers are worth keeping as key images. Be specific; another pass will merge everything.`;
+      `${historyLine}Modality: ${study.modality}. These ${images.length} montage image(s) show a portion of the study; each tile is one full-resolution slice and the small number on a tile is its image number. Record your draft observations by anatomical structure with image numbers, then the 'Key candidates:' line.`;
     return provider === "gemini" ? await gemini(study, userText, images) : await openai(study, userText, images);
   } catch (e: any) {
     const raw = String(e?.message || e);
