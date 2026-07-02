@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import {
   Search,
@@ -14,6 +14,8 @@ import { MedGemmaHealth } from "@/components/MedGemmaHealth";
 export function Topbar() {
   const [showNotif, setShowNotif] = useState(false);
   const [showAi, setShowAi] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const { user } = useUser();
 
   const displayName = user?.fullName || user?.primaryEmailAddress?.emailAddress || "Account";
@@ -85,10 +87,14 @@ export function Topbar() {
             </div>
             <div className="text-[11px] text-slate-500">Clinician</div>
           </div>
-          <UserButton
-            afterSignOutUrl="/login"
-            appearance={{ elements: { avatarBox: "h-8 w-8" } }}
-          />
+          {mounted ? (
+            <UserButton
+              afterSignOutUrl="/login"
+              appearance={{ elements: { avatarBox: "h-8 w-8" } }}
+            />
+          ) : (
+            <div className="h-8 w-8 rounded-full bg-white/10" />
+          )}
         </div>
       </div>
     </header>

@@ -43,7 +43,7 @@ Most web DICOM viewers are either read‑only toys or bloated enterprise PACS th
 
 - **Everything's local.** Pixels get decoded and rendered client‑side. **No database. Nothing leaves your machine** unless *you* press the AI button. Privacy? Immaculate.
 - **It eats anything.** DICOM/PACS, CT, MRI, CTCA, CAG, Echo, X‑Ray, OCT, Fundus, histopath, plain images, and chonky **multi‑series ZIPs**. All one viewer. No fuss.
-- **The AI reads the whole study**, not one lonely slice — in **one low‑token request** — then drops the findings into a report that's genuinely *pretty*.
+- **The AI reads EVERY slice** of the whole study, grouped **by view** (axial / coronal / sagittal), then drops per‑view findings + **key images** into a report that's genuinely *pretty*.
 - **The AI is free.** Real **MedGemma 1.5 (vision)** on a free Google Colab GPU. Zero dollars. Chef's kiss. 👨‍🍳💋
 
 ---
@@ -64,15 +64,16 @@ One engine renders DICOM *and* normal images, with real DICOM decoding. Not a sc
 - **Live status bar**: HU + cursor X/Y, active tool, editable zoom %, WL/WW, frame.
 - **Searchable DICOM Tags** panel, **collapsible panels**, **fullscreen** (`F`).
 - **Brightness/contrast matches other PACS** — it respects each image's embedded DICOM window and only falls back to a preset when a scan ships with none.
+- **Live AI health badge** (top‑right): a colorful pill that auto‑polls your model — 🟢 Live / 🟡 Warming / 🔴 Offline — with a one‑click "Open Colab" when it's asleep.
 
 ### 🎞 Cine + export for the slides
 Play multi‑frame runs (FPS control + scrubber), then **export a run** — whole thing, a **range**, or a single slide — as an animated **GIF** or a **PNG zip**. Yeet it straight into PowerPoint/Word. 🎬
 
-### 🤖 AI that actually reads the study
-One click → the **entire study** gets analyzed (with a progress bar), powered by **MedGemma 1.5 4B (vision)** or Gemini/Gemma. Findings + Impression, with the model's mumbly "thinking" tokens cleaned out.
+### 🤖 AI that actually reads the study — by view
+One click → **every slice** of the study gets analyzed (with a **colorful rotating ring** + progress bar), powered by **MedGemma 1.5 4B (vision)** or Gemini/Gemma. It reads the study the way a radiologist writes it up: findings grouped **by view** (Axial / Coronal / Sagittal, or the projection it identifies) — not by series name — plus an **Impression** and a **Key Images** list of the exact slices that show the findings. The model's mumbly "thinking" tokens get cleaned out.
 
 ### 📋 A report that pulls up looking fine
-After analysis the **editable report opens itself**, pre‑filled with **all your patient/study details** (editable!), the AI **Findings**, and a split‑out **Impression**. Export a styled standalone **`report.html`** with a built‑in **🖨 Print / Save PDF** button.
+After analysis the **editable report opens itself**, pre‑filled with **all your patient/study details** (editable!), a **Technique** line, per‑view **Findings**, a split‑out **Impression**, and a **Key Images gallery** — thumbnails of the exact slices the AI flagged, each captioned with slice # + view. Export a styled standalone **`report.html`** with a built‑in **🖨 Print / Save PDF** button.
 
 ### 🔐 Auth + settings, no cap
 **Clerk** handles login — email/password **and Google SSO** + password reset. Settings let you change your photo, name, role, org (stored on your account, not some database).
@@ -196,20 +197,20 @@ The public MedGemma GGUF loads **text‑only** in Ollama (rude), so Aura uses Ol
 
 ## 🔬 How the AI reads the WHOLE study without crying
 
-A CT can be **hundreds of slices**. Sending all of them = huge, slow, sad. So Aura plays it smart with **montages**:
+A CT can be **hundreds of slices**. Sending them one‑by‑one = huge, slow, sad. So Aura plays it smart with **view‑grouped montages** — and covers **every single slice**:
 
-1. Grab ~**36 slices spread evenly across the *whole* study** (every series).
-2. Render them (with your window) into a few **4×4 grids**, slice numbers labelled.
-3. Fire off **one request** with just those grids.
+1. **Group by view** — each slice is bucketed into its anatomical plane (Axial / Coronal / Sagittal), derived from the DICOM `ImageOrientationPatient`. No 3D orientation (X‑ray/US)? Each acquisition stays its own projection.
+2. **Tile every slice** — all of a view's slices are packed into montage grids, each with a **banner naming the view** and every tile stamped with its **slice number**. Nothing is sampled away.
+3. **Bound the images, not the coverage** — the number of montage *images* is kept sane (grids get **denser** for big studies) so it stays one manageable request, while **no slice is dropped**.
 
-Gemma‑3 vision squishes each image into ~256 tokens, so ~3 montages ≈ **a few hundred tokens** while the model still peeps the entire study. **Whole‑study coverage, one request, low tokens** — with a progress bar so you're not left guessing. Efficiency: unlocked. 🔓
+Each montage is ~256 vision tokens, so the model peeps the *entire* study across a handful of grids — and reports **per view**, citing the slice numbers it saw. **Every slice, grouped by view** — with a colorful rotating ring + progress bar so you're never left guessing. 🔓
 
 ---
 
 ## 📑 The report glow-up
 
-- **Auto‑generated** from the AI + your DICOM metadata, then **100% editable** — every patient/study field, Clinical History, Technique, **Findings**, **Impression**.
-- **Beautiful HTML**: gradient header band, patient/study info grid, series table, embedded key image, Markdown findings in tidy cards.
+- **Auto‑generated** from the AI + your DICOM metadata, then **100% editable** — every patient/study field, Clinical History, Technique, per‑view **Findings**, **Impression**.
+- **Beautiful HTML**: gradient header band, patient/study info grid, series table, per‑view Markdown findings in tidy cards, and a **Key Images gallery** — thumbnails of the exact slices the AI flagged, captioned with slice # + view.
 - **Print / Save PDF** (button baked right in + print‑friendly CSS) or **Download `report.html`**.
 - Two ways in: the toolbar **Report** button (blank canvas) or automatically **right after AI** (pre‑filled and ready).
 

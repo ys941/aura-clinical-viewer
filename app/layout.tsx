@@ -39,8 +39,8 @@ export default function RootLayout({
         },
       }}
     >
-      <html lang="en" className="dark">
-        <body className={`${inter.variable} font-sans`}>{children}</body>
+      <html lang="en" className="dark" suppressHydrationWarning>
+        <body className={`${inter.variable} font-sans`} suppressHydrationWarning>{children}</body>
       </html>
     </ClerkProvider>
   );
