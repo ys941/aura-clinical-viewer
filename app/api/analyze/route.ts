@@ -35,14 +35,15 @@ export async function POST(req: Request) {
   let body: any = {};
   try { body = await req.json(); } catch {}
 
-  const images: string[] = Array.isArray(body?.images) ? body.images.slice(0, 8) : [];
+  // Whole study: the client tiles EVERY slice into montage grids. High guard only (never trims real studies).
+  const images: string[] = Array.isArray(body?.images) ? body.images.slice(0, 40) : [];
   const views: string[] = Array.isArray(body?.views) ? body.views.map((v: any) => String(v)) : [];
   const study = { name: body?.name ?? "study", modality: body?.modality ?? "—", imageCount: body?.imageCount ?? 0, sampled: images.length };
   const viewList = views.length
     ? views.map((v, i) => `montage ${i + 1} = ${v} view`).join("; ")
     : `${images.length} montage(s)`;
   const userText =
-    `Modality: ${study.modality}. There are ${images.length} montage image(s), one per view (${viewList}). Each tile is a slice sampled across that view (${study.imageCount} images total). Read every view, then produce the report with Findings grouped per view, an Impression, and a Key Images list of the slice numbers that show the findings.`;
+    `Modality: ${study.modality}. There are ${images.length} montage image(s) that together tile EVERY slice of the study, grouped by view (${viewList}). Each tile is one slice (${study.imageCount} images total); the small number on a tile is its slice index. Review every tile of every montage, then produce the report with Findings grouped per view, an Impression, and a Key Images list of the slice numbers that show the findings.`;
 
   const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase();
 
@@ -79,7 +80,7 @@ async function gemini(study: any, userText: string, images: string[]) {
   }
   // Gemma models have no system role — fold instructions into the user turn (works for Gemini too).
   const parts: any[] = [{ text: `${SYSTEM}\n\n${userText}` }];
-  for (const u of images) { const p = dataUrlParts(u); if (p) parts.push({ inline_data: { mime_type: p.mime, data: p.data } }); }
+  for (const u of images.slice(0, 16)) { const p = dataUrlParts(u); if (p) parts.push({ inline_data: { mime_type: p.mime, data: p.data } }); }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120_000);
@@ -109,9 +110,8 @@ async function openai(study: any, userText: string, images: string[]) {
   if (!endpoint) {
     return NextResponse.json({ connected: false, study, message: "MedGemma endpoint not found. Start the Colab notebook (it auto-publishes the endpoint), or set MEDGEMMA_ENDPOINT in .env.local." });
   }
-  // Cap images so requests stay responsive (GPU Colab handles a handful easily).
-  // One montage per view — allow up to 6 so axial+coronal+sagittal (+extras) all go.
-  const capped = images.slice(0, 6);
+  // Send every montage — together they cover the whole study (no slices dropped).
+  const capped = images;
   const content: any[] = [{ type: "text", text: userText }];
   for (const u of capped) content.push({ type: "image_url", image_url: { url: u } });
   const headers: Record<string, string> = { "Content-Type": "application/json" };

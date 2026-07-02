@@ -481,7 +481,7 @@ export default function Viewer() {
   // ImageOrientationPatient) — or, when there is no 3D orientation (e.g. X-ray/US), keep
   // each series as its own distinct projection. Each view becomes ONE montage grid whose
   // banner names the view. We never pass the series description text to the model.
-  async function buildStudyMontages(perGroup = 16, cols = 4, rows = 4, tile = 256): Promise<{ images: string[]; labels: string[] }> {
+  async function buildStudyMontages(): Promise<{ images: string[]; labels: string[] }> {
     const api = apiRef.current, main = elRef.current;
     if (!api || !study) return { images: [], labels: [] };
     const cs = api.cornerstone;
@@ -500,38 +500,50 @@ export default function Viewer() {
       }
     }
 
+    // WHOLE study — EVERY slice is included (nothing is sampled away). Slices are packed
+    // into montage grids per view. To keep it one manageable request, the number of montage
+    // IMAGES is bounded by densifying the grids for large studies — slices are never dropped.
+    const N = study.imageIds.length;
+    const BUDGET = 12; // target montage images; grids get denser rather than skip slices
+    let per = 16;      // slices per montage — start readable (4×4), pack denser if needed
+    const montagesAt = (p: number) => order.reduce((a, k) => a + Math.max(1, Math.ceil(groups.get(k)!.idxs.length / p)), 0);
+    if (montagesAt(per) > BUDGET) per = Math.max(16, Math.ceil(N / BUDGET));
+    const cols = Math.ceil(Math.sqrt(per));
+    const rows = Math.ceil(per / cols);
+    const tile = Math.max(96, Math.min(256, Math.floor(1024 / cols)));
+    const HEAD = 26;
+
     const off = document.createElement("div");
     off.style.cssText = `position:fixed;left:-10000px;top:0;width:${tile}px;height:${tile}px;`;
     document.body.appendChild(off);
-    const HEAD = 26;
     const images: string[] = [], labels: string[] = [];
     try {
       cs.enable(off);
       const mainVp = main ? cs.getViewport(main) : null;
       const ids = study.imageIds;
-      // Plan: sample each view evenly into up to `perGroup` tiles.
-      const plans = order.map((k) => {
-        const g = groups.get(k)!; const n = g.idxs.length, take = Math.min(perGroup, n);
-        const picks: number[] = [];
-        for (let t = 0; t < take; t++) picks.push(g.idxs[Math.floor(((t + 0.5) * n) / take)]);
-        return { label: g.label, picks: Array.from(new Set(picks)) };
-      });
-      const totalTiles = plans.reduce((a, p) => a + p.picks.length, 0);
+      // Full plan: chunk every view's slices into montages of `per`, covering all slices.
+      const plans: { label: string; part: number; parts: number; slices: number[] }[] = [];
+      for (const k of order) {
+        const g = groups.get(k)!;
+        const parts = Math.max(1, Math.ceil(g.idxs.length / per));
+        for (let m = 0; m < parts; m++) plans.push({ label: g.label, part: m + 1, parts, slices: g.idxs.slice(m * per, (m + 1) * per) });
+      }
+      const totalTiles = plans.reduce((a, p) => a + p.slices.length, 0);
       let done = 0;
-      setAiProgress({ done: 0, total: totalTiles, phase: "Rendering views" });
+      setAiProgress({ done: 0, total: totalTiles, phase: "Rendering slices" });
 
       for (const plan of plans) {
         const canvas = document.createElement("canvas");
         canvas.width = cols * tile; canvas.height = rows * tile + HEAD;
         const ctx = canvas.getContext("2d")!;
         ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-        // view banner
         ctx.fillStyle = "#0b1220"; ctx.fillRect(0, 0, canvas.width, HEAD);
         ctx.fillStyle = "#7ce0ff"; ctx.font = "bold 15px monospace";
-        ctx.fillText(`${plan.label.toUpperCase()}  ·  ${study.modality}`, 8, 18);
+        const tag = plan.parts > 1 ? `${plan.label.toUpperCase()} (${plan.part}/${plan.parts})` : plan.label.toUpperCase();
+        ctx.fillText(`${tag}  ·  ${study.modality}`, 8, 18);
 
         let ti = 0;
-        for (const gi of plan.picks) {
+        for (const gi of plan.slices) {
           const img = await cs.loadAndCacheImage(ids[gi]);
           cs.displayImage(off, img);
           if (mainVp) { const vp = cs.getViewport(off); vp.voi = { ...mainVp.voi }; vp.invert = mainVp.invert; cs.setViewport(off, vp); }
@@ -541,8 +553,8 @@ export default function Viewer() {
           const src = off.querySelector("canvas") as HTMLCanvasElement;
           const cx = (ti % cols) * tile, cy = HEAD + Math.floor(ti / cols) * tile;
           ctx.drawImage(src, cx, cy, tile, tile);
-          ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(cx, cy, 34, 16);
-          ctx.fillStyle = "#7ce0ff"; ctx.font = "11px monospace"; ctx.fillText(String(gi + 1), cx + 3, cy + 12);
+          ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(cx, cy, 30, 14);
+          ctx.fillStyle = "#7ce0ff"; ctx.font = "10px monospace"; ctx.fillText(String(gi + 1), cx + 2, cy + 11);
           ti++; setAiProgress({ done: ++done, total: totalTiles, phase: `Rendering ${plan.label}` });
         }
         images.push(canvas.toDataURL("image/jpeg", 0.8)); labels.push(plan.label);
@@ -735,18 +747,26 @@ export default function Viewer() {
             )}</AnimatePresence>
             {/* AI progress */}
             <AnimatePresence>{ai.loading && aiProgress && (
-              <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                className="absolute left-1/2 top-1/2 w-72 -translate-x-1/2 -translate-y-1/2 rounded-xl border border-teal-500/30 bg-navy-900/95 p-4 text-center backdrop-blur">
-                <div className="flex items-center justify-center gap-2 text-sm font-semibold text-white">
-                  <Sparkles className="h-4 w-4 animate-pulse text-teal-300" /> Analyzing whole study
+              <motion.div initial={{ opacity: 0, scale: 0.94 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.94 }}
+                className="absolute left-1/2 top-1/2 w-72 -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-teal-500/30 bg-navy-900/95 p-5 text-center shadow-[0_0_40px_-8px_rgba(20,184,166,0.5)] backdrop-blur">
+                {/* colorful rotating ring */}
+                <div className="relative mx-auto mb-3 h-16 w-16">
+                  <div className="absolute inset-0 rounded-full [animation:spin_1.1s_linear_infinite]"
+                    style={{ background: "conic-gradient(from 0deg, #22d3ee, #6366f1, #ec4899, #f59e0b, #10b981, #22d3ee)", WebkitMask: "radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 6px))", mask: "radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 6px))" }} />
+                  <div className="absolute inset-0 rounded-full opacity-60 blur-md [animation:spin_1.1s_linear_infinite]"
+                    style={{ background: "conic-gradient(from 0deg, #22d3ee, #6366f1, #ec4899, #f59e0b, #10b981, #22d3ee)", WebkitMask: "radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 6px))", mask: "radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 6px))" }} />
+                  <div className="absolute inset-0 grid place-items-center"><Sparkles className="h-5 w-5 animate-pulse text-teal-200" /></div>
                 </div>
+                <div className="text-sm font-semibold text-white">Analyzing whole study</div>
                 <div className="mt-1 text-[11px] text-slate-400">
-                  {aiProgress.phase}{aiProgress.total > 1 ? ` · ${aiProgress.done}/${aiProgress.total} slices` : "…"}
+                  {aiProgress.phase}{aiProgress.total > 1 ? ` · ${aiProgress.done}/${aiProgress.total} slices` : " — reading with MedGemma…"}
                 </div>
-                <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-                  <div className="h-full rounded-full bg-teal-400 transition-all" style={{ width: `${Math.round((aiProgress.done / Math.max(1, aiProgress.total)) * 100)}%` }} />
-                </div>
-                <div className="mt-2 text-[10px] text-slate-500">{study.imageIds.length} images · one request · low tokens</div>
+                {aiProgress.total > 1 && (
+                  <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                    <div className="h-full rounded-full transition-all" style={{ width: `${Math.round((aiProgress.done / Math.max(1, aiProgress.total)) * 100)}%`, background: "linear-gradient(90deg,#22d3ee,#6366f1,#ec4899)" }} />
+                  </div>
+                )}
+                <div className="mt-2 text-[10px] text-slate-500">{study.imageIds.length} slices · every slice · all views</div>
               </motion.div>
             )}</AnimatePresence>
           </div>
