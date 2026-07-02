@@ -19,6 +19,7 @@ const SYSTEM =
   "## Technique\n- One line: the modality and the views/planes provided.\n\n" +
   "## Findings\nOrganize findings BY VIEW. For each view present, use a bold sub-label and describe what that view shows, citing slice numbers where relevant:\n- **Axial:** …\n- **Coronal:** …\n- **Sagittal:** …\n(For radiographs/other, use the projection you identify, e.g. **Frontal:**, **Lateral:**.) Be systematic; note normal structures and any abnormality with its location and slice number.\n\n" +
   "## Impression\n- 1–3 numbered, concise clinical takeaways.\n\n" +
+  "## Recommendations\n- 1–3 short, actionable next steps (correlation, follow-up imaging, referral). Write '- Clinical correlation.' if nothing specific.\n\n" +
   "## Key Images\nList ONLY the slice numbers that best demonstrate the findings/impression, one per line, as:\n- Slice <number> (<view>): <what it shows>\nUse the exact slice numbers printed on the tiles. If the study is unremarkable, write '- None'.\n\n" +
   "Rules: only sampled slices were reviewed — say so. This is clinical decision support, not a diagnosis. Output ONLY these sections — no reasoning, no special tokens.";
 
@@ -28,6 +29,7 @@ const SYSTEM_SYNTH =
   "## Technique\n- modality + the views/planes covered.\n\n" +
   "## Findings\nGrouped BY VIEW (Axial/Coronal/Sagittal, or the projection), with bold sub-labels, citing slice numbers. Merge duplicate findings across notes and keep the most specific wording.\n\n" +
   "## Impression\n- 1–4 numbered clinical takeaways.\n\n" +
+  "## Recommendations\n- 1–3 short, actionable next steps (correlation, follow-up imaging, referral). Write '- Clinical correlation.' if nothing specific.\n\n" +
   "## Key Images\n- Slice <number> (<view>): <what it shows> — the most representative slices drawn from the notes. Write '- None' if unremarkable.\n\n" +
   "Rules: do NOT invent findings that are not in the notes; note that only the reviewed slices were seen; this is decision support, not a diagnosis. Output ONLY these sections — no reasoning, no special tokens.";
 

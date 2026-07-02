@@ -48,22 +48,23 @@ type KeyImage = { slice: number; view: string; caption: string; url: string };
 // Split the model's markdown into Technique / Findings / Impression by locating the
 // section headings and slicing between them (tolerant of "## H" or "**H**"). The Key
 // Images section is dropped from the prose — it is rendered as a thumbnail gallery.
-function splitAiReport(text: string): { technique: string; findings: string; impression: string } {
-  const re = /(^|\n)\s*(?:#{1,4}\s*)?\**\s*(technique|findings|impression|key\s*images?)\s*\**\s*:?\s*/gi;
+function splitAiReport(text: string): { technique: string; findings: string; impression: string; recommendations: string } {
+  const re = /(^|\n)\s*(?:#{1,4}\s*)?\**\s*(technique|findings|impression|recommendations?|advice|key\s*images?)\s*\**\s*:?\s*/gi;
   const pos: { name: string; start: number; contentStart: number }[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) pos.push({ name: m[2].toLowerCase().replace(/\s+/g, " "), start: m.index, contentStart: re.lastIndex });
   const sec: Record<string, string> = {};
   for (let i = 0; i < pos.length; i++) {
     const p = pos[i], next = pos[i + 1];
-    const key = p.name.startsWith("key") ? "key images" : p.name;
+    const key = p.name.startsWith("key") ? "key images" : p.name.startsWith("recommendation") || p.name === "advice" ? "recommendations" : p.name;
     sec[key] = text.slice(p.contentStart, next ? next.start : text.length).trim();
   }
   const technique = sec["technique"] || "";
   let findings = sec["findings"] || "";
   const impression = sec["impression"] || "";
+  const recommendations = sec["recommendations"] || "";
   if (!findings && !technique && !impression) findings = text.trim(); // model ignored headings
-  return { technique, findings, impression };
+  return { technique, findings, impression, recommendations };
 }
 
 // Parse the "Key Images" section into slice references (slice number + optional view + caption).
@@ -151,6 +152,7 @@ export default function Viewer() {
   const [reportFindings, setReportFindings] = useState("");
   const [reportImpression, setReportImpression] = useState("");
   const [reportTechnique, setReportTechnique] = useState("");
+  const [reportRecs, setReportRecs] = useState("");
   const [snapshot, setSnapshot] = useState("");
   const [keyImages, setKeyImages] = useState<KeyImage[]>([]);
   const [exporting, setExporting] = useState<number | null>(null);
@@ -628,6 +630,7 @@ export default function Viewer() {
       setReportTechnique(parts.technique);
       setReportFindings(parts.findings || finalText);
       setReportImpression(parts.impression);
+      setReportRecs(parts.recommendations);
       // 4) Capture the exact slices the report called out as "Key Images".
       setAiProgress({ done: batches + 1, total: batches + 1, phase: "Capturing key images" });
       try { setKeyImages(await renderKeyImages(parseKeyImageRefs(finalText))); } catch { setKeyImages([]); }
@@ -638,7 +641,7 @@ export default function Viewer() {
     } catch (e: any) { setAiProgress(null); setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
   }
 
-  function openReport(findings = "") { setReportFindings(findings); setReportImpression(""); setReportTechnique(""); setKeyImages([]); const canvas = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null; setSnapshot(canvas ? canvas.toDataURL("image/png") : ""); setShowReport(true); }
+  function openReport(findings = "") { setReportFindings(findings); setReportImpression(""); setReportTechnique(""); setReportRecs(""); setKeyImages([]); const canvas = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null; setSnapshot(canvas ? canvas.toDataURL("image/png") : ""); setShowReport(true); }
 
   // ───────── empty state ─────────
   if (study === null) {
@@ -833,7 +836,7 @@ export default function Viewer() {
           onCopy={() => { navigator.clipboard?.writeText(ai.text || ""); toast("Findings copied"); }}
           onReport={() => { setShowAiResult(false); openReport(ai.text || ""); }} />
       )}</AnimatePresence>
-      <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} initialFindings={reportFindings} initialImpression={reportImpression} initialTechnique={reportTechnique} keyImages={keyImages} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
+      <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} initialFindings={reportFindings} initialImpression={reportImpression} initialTechnique={reportTechnique} initialRecs={reportRecs} keyImages={keyImages} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
       <AnimatePresence>{showExport && activeSeries && <ExportModal seriesName={activeSeries.name} total={total} current={index + 1} fps={fps} onClose={() => setShowExport(false)} onExport={exportRun} />}</AnimatePresence>
     </div>
   );
@@ -883,7 +886,7 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
 function dlHtml(html: string, name: string) { const b = new Blob([html], { type: "text/html" }); const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = name; a.click(); }
 function printHtml(html: string) { const w = window.open("", "_blank"); if (!w) return; w.document.write(html); w.document.close(); w.focus(); setTimeout(() => w.print(), 350); }
 
-interface ReportOpts { info?: Record<string, string>; history?: string; technique?: string; findings?: string; impression?: string; snapshot?: string; keyImages?: KeyImage[]; measurements?: { tool: string; text: string }[]; aiConnected?: boolean }
+interface ReportOpts { info?: Record<string, string>; history?: string; technique?: string; comparison?: string; findings?: string; impression?: string; recommendations?: string; snapshot?: string; keyImages?: KeyImage[]; measurements?: { tool: string; text: string }[]; aiConnected?: boolean; clinicName?: string; clinicAddress?: string; doctorName?: string; doctorCreds?: string }
 function buildReportHtml(study: LoadedStudy, o: ReportOpts): string {
   const d = study.dict;
   const info = o.info || {};
@@ -912,71 +915,85 @@ function buildReportHtml(study: LoadedStudy, o: ReportOpts): string {
     closeList();
     return html;
   };
-  const rows = study.series.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.modality)}</td><td>${s.count}</td></tr>`).join("");
+  const comparison = o.comparison || "";
+  const recommendations = o.recommendations || "";
+  const clinicName = o.clinicName || `${BRAND.name} Diagnostic Imaging`;
+  const clinicAddress = o.clinicAddress || "";
+  const doctorName = o.doctorName || "";
+  const doctorCreds = o.doctorCreds || "";
   const val = (k: string) => (info[k] ?? d[k] ?? "");
-  const infoPairs = ["Patient Name", "Patient ID", "Patient Birth Date", "Patient Sex", "Patient Age", "Study Date", "Modality", "Study Description", "Referring Physician", "Accession #"].map((k) => [k, val(k)] as const).filter(([, v]) => v).map(([k, v]) => `<div class="kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
-  const meas = measurements.length ? `<h2>Measurements</h2><ul>${measurements.map((m) => `<li>${esc(m.tool.replace("Roi", " ROI"))}: <b>${esc(m.text)}</b></li>`).join("")}</ul>` : "";
+  const now = new Date();
+  const reportDate = `${String(now.getDate()).padStart(2, "0")}/${String(now.getMonth() + 1).padStart(2, "0")}/${now.getFullYear()} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const examTitle = (val("Study Description") || `${study.modality} STUDY`).toUpperCase();
+  const ageSex = [val("Patient Age"), val("Patient Sex")].filter(Boolean).join(" / ");
+  const ptRows: [string, string][] = [
+    ["Patient Name", val("Patient Name") || study.name], ["Patient ID", val("Patient ID")],
+    ["Age / Sex", ageSex], ["Referred By", val("Referring Physician")],
+    ["Study Date", val("Study Date")], ["Accession No.", val("Accession #")],
+    ["Modality", val("Modality") || study.modality], ["Report Date", reportDate],
+  ];
+  const ptTable = `<table class="pt"><tbody>${[0, 2, 4, 6].map((i) => `<tr><th>${ptRows[i][0]}</th><td>${esc(ptRows[i][1] || "—")}</td><th>${ptRows[i + 1][0]}</th><td>${esc(ptRows[i + 1][1] || "—")}</td></tr>`).join("")}</tbody></table>`;
+  const meas = measurements.length ? `<div class="sect"><h2>Measurements</h2><ul>${measurements.map((m) => `<li>${esc(m.tool.replace("Roi", " ROI"))}: <b>${esc(m.text)}</b></li>`).join("")}</ul></div>` : "";
   const findingsHtml = findings ? md(findings) : `<p class="muted">${o.aiConnected ? "—" : "[entered manually]"}</p>`;
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${BRAND.name} Report — ${esc(study.name)}</title>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(examTitle)} — ${esc(val("Patient Name") || study.name)}</title>
 <style>
-:root{--blue:#1a5ae0;--teal:#0d9488;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0}
+:root{--ink:#111827;--muted:#6b7280;--line:#d1d5db;--accent:#1e3a8a}
 *{box-sizing:border-box}
-body{font-family:'Segoe UI',Roboto,Arial,sans-serif;color:var(--ink);margin:0;background:#f1f5f9}
-.page{max-width:860px;margin:24px auto;background:#fff;box-shadow:0 6px 30px -12px rgba(0,0,0,.25);border-radius:12px;overflow:hidden}
-.band{background:linear-gradient(120deg,#0a1023,#173c91 60%,#0d9488);color:#fff;padding:22px 28px;display:flex;justify-content:space-between;align-items:flex-end}
-.band h1{margin:0;font-size:22px;letter-spacing:.3px}
-.band .sub{opacity:.85;font-size:12px;margin-top:4px}
-.band .rt{text-align:right;font-size:12px;opacity:.9}
-.body{padding:24px 28px}
-h2{font-size:12px;color:var(--blue);margin:22px 0 8px;text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--line);padding-bottom:5px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 24px}
-.kv{display:flex;justify-content:space-between;font-size:13px;border-bottom:1px dotted var(--line);padding:3px 0}
-.kv span{color:var(--muted)} .kv b{color:var(--ink)}
-table{border-collapse:collapse;width:100%;font-size:12.5px;margin:4px 0}
-th{background:#f8fafc;text-align:left} td,th{border:1px solid var(--line);padding:6px 10px}
-.imgs{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
-.imgs img{max-width:260px;border:1px solid var(--line);border-radius:8px}
-.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:8px}
-.kimg{margin:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#0b1220}
+body{font-family:Cambria,'Times New Roman',Georgia,serif;color:var(--ink);margin:0;background:#e5e7eb;font-size:13.5px;line-height:1.55}
+.page{max-width:820px;margin:20px auto;background:#fff;box-shadow:0 4px 24px -10px rgba(0,0,0,.3);padding:34px 44px 26px}
+.lh{text-align:center;border-bottom:3px double var(--accent);padding-bottom:10px}
+.lh .cn{font-size:21px;font-weight:700;letter-spacing:.06em;color:var(--accent);text-transform:uppercase}
+.lh .ca{font-size:11.5px;color:var(--muted);margin-top:2px}
+.pt{border-collapse:collapse;width:100%;margin:14px 0 4px;font-size:12.5px}
+.pt th{text-align:left;font-weight:700;background:#f3f4f6;width:14%;white-space:nowrap}
+.pt td{width:36%} .pt td,.pt th{border:1px solid var(--line);padding:5px 9px}
+.title{text-align:center;font-size:15px;font-weight:700;letter-spacing:.08em;text-decoration:underline;text-underline-offset:4px;margin:16px 0 4px;text-transform:uppercase}
+.sect{margin-top:13px}
+h2{font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink);margin:0 0 4px;border-bottom:1px solid var(--line);padding-bottom:2px}
+h3{font-size:13px;margin:8px 0 2px;color:var(--ink)}
+ul{margin:2px 0 6px 22px;padding:0} li{margin:2.5px 0}
+p{margin:4px 0}
+.sec{white-space:pre-wrap}
+.muted{color:var(--muted)}
+.imp p,.imp li{font-weight:600}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-top:6px}
+.kimg{margin:0;border:1px solid var(--line);overflow:hidden}
 .kimg img{width:100%;display:block;background:#000}
-.kimg figcaption{font-size:11px;color:#334155;padding:6px 8px;background:#f8fafc;border-top:1px solid var(--line)}
-.kimg figcaption b{color:var(--teal)}
-.card{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
-.card h3{color:var(--teal);font-size:14px;margin:10px 0 4px} .card h3:first-child{margin-top:0}
-.card ul{margin:4px 0 8px 18px;padding:0} .card li{margin:3px 0;font-size:13px}
-.card p{font-size:13px;margin:6px 0;white-space:pre-wrap}
-.sec{white-space:pre-wrap;font-size:13px;color:#1e293b}
-.muted{color:var(--muted);font-size:12px}
-.disclaimer{margin-top:20px;padding:10px 14px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;color:#9a3412;font-size:11.5px}
-.print-btn{position:fixed;top:18px;right:18px;background:var(--blue);color:#fff;border:0;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 14px -4px rgba(26,90,224,.6)}
-@media print{body{background:#fff}.page{box-shadow:none;margin:0;border-radius:0;max-width:100%}.print-btn{display:none}h2{page-break-after:avoid}.card,table{page-break-inside:avoid}}
+.kimg figcaption{font-size:10.5px;color:#374151;padding:4px 6px;border-top:1px solid var(--line)}
+.sig{margin-top:34px;display:flex;justify-content:flex-end}
+.sig .box{text-align:center;min-width:230px}
+.sig .line{border-top:1px solid var(--ink);margin-bottom:4px}
+.sig .dn{font-weight:700} .sig .dc{font-size:11.5px;color:var(--muted)}
+.everify{margin-top:6px;font-size:10.5px;color:var(--muted);text-align:right}
+.disclaimer{margin-top:18px;border-top:1px solid var(--line);padding-top:7px;color:var(--muted);font-size:10.5px}
+.endline{text-align:center;font-size:11px;letter-spacing:.2em;color:var(--muted);margin-top:16px}
+.print-btn{position:fixed;top:16px;right:16px;background:var(--accent);color:#fff;border:0;border-radius:6px;padding:9px 15px;font-size:13px;font-weight:600;cursor:pointer;font-family:'Segoe UI',sans-serif}
+@media print{body{background:#fff}.page{box-shadow:none;margin:0;max-width:100%;padding:10mm 12mm}.print-btn{display:none}.sect,.pt,.sig,.kimg{page-break-inside:avoid}h2{page-break-after:avoid}}
 </style></head><body>
 <button class="print-btn" onclick="window.print()">🖨 Print / Save PDF</button>
 <div class="page">
-  <div class="band">
-    <div><h1>${BRAND.name} — Imaging Report</h1><div class="sub">${esc(val("Study Description") || study.modality + " study")}</div></div>
-    <div class="rt">${esc(val("Study Date"))}<br>${study.series.length} series · ${study.imageIds.length} images</div>
-  </div>
-  <div class="body">
-    <h2>Patient &amp; Study</h2>
-    <div class="grid">${infoPairs || `<div class="kv"><span>Study</span><b>${esc(study.name)}</b></div><div class="kv"><span>Modality</span><b>${esc(study.modality)}</b></div>`}</div>
-    <h2>Series</h2><table><tr><th>Series</th><th>Modality</th><th>Images</th></tr>${rows}</table>
-    ${snapshot ? `<h2>Current view</h2><div class="imgs"><img src="${snapshot}"/></div>` : ""}
-    ${meas}
-    ${history ? `<h2>Clinical history</h2><div class="sec">${esc(history)}</div>` : ""}
-    <h2>Technique</h2><div class="sec">${esc(technique)}</div>
-    <h2>Findings</h2><div class="card">${findingsHtml}</div>
-    ${impression ? `<h2>Impression</h2><div class="card">${md(impression)}</div>` : ""}
-    ${keyImages.length ? `<h2>Key Images</h2><div class="gallery">${keyImages.map((k) => `<figure class="kimg"><img src="${k.url}" alt="slice ${k.slice}"/><figcaption><b>Slice ${k.slice}${k.view ? ` · ${esc(k.view)}` : ""}</b>${k.caption ? `<br>${esc(k.caption)}` : ""}</figcaption></figure>`).join("")}</div>` : ""}
-    <div class="disclaimer">⚠️ AI-assisted read of sampled slices across the whole study — clinical decision support only, <b>not a diagnosis</b>. Verify against the full study. Images processed locally.</div>
-    <p class="muted" style="margin-top:14px">Generated by ${BRAND.name}.</p>
-  </div>
+  <div class="lh"><div class="cn">${esc(clinicName)}</div>${clinicAddress ? `<div class="ca">${esc(clinicAddress)}</div>` : ""}</div>
+  ${ptTable}
+  <div class="title">${esc(examTitle)}</div>
+  ${history ? `<div class="sect"><h2>Clinical History</h2><div class="sec">${esc(history)}</div></div>` : ""}
+  <div class="sect"><h2>Technique</h2><div class="sec">${esc(technique)}</div></div>
+  ${comparison ? `<div class="sect"><h2>Comparison</h2><div class="sec">${esc(comparison)}</div></div>` : ""}
+  <div class="sect"><h2>Findings</h2>${findingsHtml}</div>
+  ${meas}
+  ${impression ? `<div class="sect imp"><h2>Impression</h2>${md(impression)}</div>` : ""}
+  ${recommendations ? `<div class="sect"><h2>Advice / Recommendations</h2>${md(recommendations)}</div>` : ""}
+  ${keyImages.length ? `<div class="sect"><h2>Key Images</h2><div class="gallery">${keyImages.map((k) => `<figure class="kimg"><img src="${k.url}" alt="slice ${k.slice}"/><figcaption><b>Slice ${k.slice}${k.view ? ` · ${esc(k.view)}` : ""}</b>${k.caption ? ` — ${esc(k.caption)}` : ""}</figcaption></figure>`).join("")}</div></div>` : ""}
+  ${snapshot && !keyImages.length ? `<div class="sect"><h2>Reference Image</h2><div class="gallery"><figure class="kimg"><img src="${snapshot}"/></figure></div></div>` : ""}
+  <div class="sig"><div class="box"><div style="height:46px"></div><div class="line"></div><div class="dn">${esc(doctorName) || "&nbsp;"}</div>${doctorCreds ? `<div class="dc">${esc(doctorCreds)}</div>` : ""}</div></div>
+  <div class="everify">Electronically verified report · Generated ${reportDate}</div>
+  <div class="disclaimer">AI-assisted preliminary read (${study.imageIds.length} images reviewed) — clinical decision support only, <b>not a final diagnosis</b>. To be correlated clinically and verified by the reporting radiologist. Images processed locally.</div>
+  <div class="endline">— END OF REPORT —</div>
 </div></body></html>`;
 }
 
 function AiResultModal({ text, study, snapshot, keyImages = [], measurements, onClose, onCopy, onReport }: { text: string; study: LoadedStudy; snapshot: string; keyImages?: KeyImage[]; measurements: { tool: string; text: string }[]; onClose: () => void; onCopy: () => void; onReport: () => void }) {
   const parts = splitAiReport(text);
-  const report = () => buildReportHtml(study, { technique: parts.technique, findings: parts.findings || text, impression: parts.impression, snapshot, keyImages, measurements, aiConnected: true });
+  const report = () => { const p = loadPrefs(); return buildReportHtml(study, { technique: parts.technique, findings: parts.findings || text, impression: parts.impression, recommendations: parts.recommendations, snapshot, keyImages, measurements, aiConnected: true, clinicName: p.clinicName, clinicAddress: p.clinicAddress, doctorName: p.doctorName, doctorCreds: p.doctorCreds }); };
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-4">
       <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="flex max-h-[85vh] w-full max-w-xl flex-col panel p-0">
@@ -1021,7 +1038,10 @@ function ExportModal({ seriesName, total, current, fps, onClose, onExport }: { s
   );
 }
 
-function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", initialImpression = "", initialTechnique = "", keyImages = [], onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; initialFindings?: string; initialImpression?: string; initialTechnique?: string; keyImages?: KeyImage[]; onClose: () => void; onSaved: () => void }) {
+const PREFS_KEY = "aura-report-prefs";
+function loadPrefs(): Record<string, string> { try { return JSON.parse(localStorage.getItem(PREFS_KEY) || "{}"); } catch { return {}; } }
+
+function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", initialImpression = "", initialTechnique = "", initialRecs = "", keyImages = [], onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; initialFindings?: string; initialImpression?: string; initialTechnique?: string; initialRecs?: string; keyImages?: KeyImage[]; onClose: () => void; onSaved: () => void }) {
   const d = study.dict;
   // all details, auto-filled from DICOM, fully editable
   const [f, setF] = useState<Record<string, string>>({
@@ -1034,11 +1054,20 @@ function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", 
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
   const [history, setHistory] = useState("");
   const [technique, setTechnique] = useState(initialTechnique || `${study.modality} study — ${study.imageIds.length} images across ${study.series.length} view(s).`);
+  const [comparison, setComparison] = useState("");
   const [findings, setFindings] = useState(initialFindings);
   const [impression, setImpression] = useState(initialImpression);
-  const buildHtml = () => buildReportHtml(study, { info: f, history, technique, findings, impression, snapshot, keyImages, measurements, aiConnected: ai.connected });
-  function downloadHtml() { dlHtml(buildHtml(), `report-${(f["Patient Name"] || study.name).replace(/\W+/g, "_")}.html`); onSaved(); }
-  function printReport() { printHtml(buildHtml()); }
+  const [recommendations, setRecommendations] = useState(initialRecs);
+  // letterhead + signature — remembered across sessions (localStorage, this device only)
+  const [prefs] = useState(loadPrefs);
+  const [clinicName, setClinicName] = useState(prefs.clinicName || "");
+  const [clinicAddress, setClinicAddress] = useState(prefs.clinicAddress || "");
+  const [doctorName, setDoctorName] = useState(prefs.doctorName || "");
+  const [doctorCreds, setDoctorCreds] = useState(prefs.doctorCreds || "");
+  const savePrefs = () => { try { localStorage.setItem(PREFS_KEY, JSON.stringify({ clinicName, clinicAddress, doctorName, doctorCreds })); } catch {} };
+  const buildHtml = () => buildReportHtml(study, { info: f, history, technique, comparison, findings, impression, recommendations, snapshot, keyImages, measurements, aiConnected: ai.connected, clinicName, clinicAddress, doctorName, doctorCreds });
+  function downloadHtml() { savePrefs(); dlHtml(buildHtml(), `report-${(f["Patient Name"] || study.name).replace(/\W+/g, "_")}.html`); onSaved(); }
+  function printReport() { savePrefs(); printHtml(buildHtml()); }
   const detailFields = ["Patient Name", "Patient ID", "Patient Sex", "Patient Age", "Study Date", "Study Description", "Referring Physician", "Accession #"];
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -1069,7 +1098,22 @@ function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", 
               ))}
             </div>
           </div>
-          {[{ label: "Clinical history", v: history, set: setHistory, r: 2 }, { label: "Technique", v: technique, set: setTechnique, r: 2 }, { label: "Findings", v: findings, set: setFindings, r: 6 }, { label: "Impression", v: impression, set: setImpression, r: 3 }].map((s) => (<L key={s.label} label={s.label}><textarea value={s.v} onChange={(e) => s.set(e.target.value)} rows={s.r} className={rin} /></L>))}
+          {[{ label: "Clinical history", v: history, set: setHistory, r: 2 }, { label: "Technique", v: technique, set: setTechnique, r: 2 }, { label: "Comparison", v: comparison, set: setComparison, r: 1 }, { label: "Findings", v: findings, set: setFindings, r: 6 }, { label: "Impression", v: impression, set: setImpression, r: 3 }, { label: "Advice / Recommendations", v: recommendations, set: setRecommendations, r: 2 }].map((s) => (<L key={s.label} label={s.label}><textarea value={s.v} onChange={(e) => s.set(e.target.value)} rows={s.r} className={rin} /></L>))}
+          <div>
+            <label className="label-tiny">Letterhead &amp; reporting doctor <span className="text-slate-500">(remembered on this device)</span></label>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              {[
+                { k: "Centre name", v: clinicName, set: setClinicName, ph: "e.g. City Heart Imaging Centre" },
+                { k: "Centre address / phone", v: clinicAddress, set: setClinicAddress, ph: "e.g. Mall Road, Bathinda · +91 …" },
+                { k: "Reporting doctor", v: doctorName, set: setDoctorName, ph: "e.g. Dr. A. Sharma" },
+                { k: "Qualifications / Reg. no.", v: doctorCreds, set: setDoctorCreds, ph: "e.g. MD (Radiodiagnosis) · Reg. 12345" },
+              ].map((x) => (
+                <label key={x.k} className="block"><span className="text-[10px] text-slate-500">{x.k}</span>
+                  <input value={x.v} onChange={(e) => x.set(e.target.value)} placeholder={x.ph} className="mt-0.5 h-9 w-full rounded-lg border border-white/10 bg-navy-850 px-2.5 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-medical-500/50" />
+                </label>
+              ))}
+            </div>
+          </div>
         </div>
         <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-3.5"><button onClick={printReport} className="btn-ghost">🖨 Print / PDF</button><button onClick={downloadHtml} className="btn-primary"><Download className="h-4 w-4" /> Download report</button></div>
       </motion.div>
