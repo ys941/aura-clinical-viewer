@@ -22,6 +22,15 @@ const SYSTEM =
   "## Key Images\nList ONLY the slice numbers that best demonstrate the findings/impression, one per line, as:\n- Slice <number> (<view>): <what it shows>\nUse the exact slice numbers printed on the tiles. If the study is unremarkable, write '- None'.\n\n" +
   "Rules: only sampled slices were reviewed — say so. This is clinical decision support, not a diagnosis. Output ONLY these sections — no reasoning, no special tokens.";
 
+// Used by the synthesis pass: merge several partial notes into ONE final report.
+const SYSTEM_SYNTH =
+  "You are a radiologist writing the FINAL report for an imaging study by consolidating several partial notes (each note reviewed a different set of full-resolution slices). Merge them into ONE clean report in Markdown with EXACTLY these sections:\n\n" +
+  "## Technique\n- modality + the views/planes covered.\n\n" +
+  "## Findings\nGrouped BY VIEW (Axial/Coronal/Sagittal, or the projection), with bold sub-labels, citing slice numbers. Merge duplicate findings across notes and keep the most specific wording.\n\n" +
+  "## Impression\n- 1–4 numbered clinical takeaways.\n\n" +
+  "## Key Images\n- Slice <number> (<view>): <what it shows> — the most representative slices drawn from the notes. Write '- None' if unremarkable.\n\n" +
+  "Rules: do NOT invent findings that are not in the notes; note that only the reviewed slices were seen; this is decision support, not a diagnosis. Output ONLY these sections — no reasoning, no special tokens.";
+
 // Strip model control / chain-of-thought tokens (e.g. MedGemma's <unused94> thought …).
 function clean(text: string): string {
   let t = text.replace(/<\/?unused\d+>/gi, "").replace(/<\/?(end_of_turn|start_of_turn|bos|eos)>/gi, "");
@@ -35,32 +44,34 @@ export async function POST(req: Request) {
   let body: any = {};
   try { body = await req.json(); } catch {}
 
-  // Whole study: the client tiles EVERY slice into montage grids. Guard bounds the image count
-  // so the request fits the model context (~256 tokens/image; 24 ≈ 6k tokens < 8k num_ctx).
-  const images: string[] = Array.isArray(body?.images) ? body.images.slice(0, 24) : [];
-  const views: string[] = Array.isArray(body?.views) ? body.views.map((v: any) => String(v)) : [];
-  const study = { name: body?.name ?? "study", modality: body?.modality ?? "—", imageCount: body?.imageCount ?? 0, sampled: images.length };
-  const viewList = views.length
-    ? views.map((v, i) => `montage ${i + 1} = ${v} view`).join("; ")
-    : `${images.length} montage(s)`;
-  const userText =
-    `Modality: ${study.modality}. There are ${images.length} montage image(s) that together tile EVERY slice of the study, grouped by view (${viewList}). Each tile is one slice (${study.imageCount} images total); the small number on a tile is its slice index. Review every tile of every montage, then produce the report with Findings grouped per view, an Impression, and a Key Images list of the slice numbers that show the findings.`;
-
   const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase();
+  const study = { name: body?.name ?? "study", modality: body?.modality ?? "—", imageCount: body?.imageCount ?? 0, sampled: 0 };
 
   try {
-    if (provider === "gemini") return await gemini(study, userText, images);
-    return await openai(study, userText, images);
+    // ── Synthesis pass: merge partial per-batch notes into ONE final report (text only) ──
+    if (body?.mode === "synthesize") {
+      const notes: string[] = Array.isArray(body?.notes) ? body.notes.map((n: any) => String(n)).filter(Boolean) : [];
+      if (!notes.length) return NextResponse.json({ connected: false, study, message: "Nothing to synthesize — no batch notes were produced." });
+      const userText =
+        `You are consolidating ${notes.length} partial radiology note(s) from ONE ${study.modality} study (each note covered a different set of full-resolution slices; ${study.imageCount} images total). Merge them into a single final report — deduplicate repeated findings, keep the slice numbers, and organise Findings by view.\n\n` +
+        notes.map((n, i) => `----- Notes ${i + 1} -----\n${n}`).join("\n\n");
+      return provider === "gemini" ? await gemini(study, userText, [], SYSTEM_SYNTH) : await openai(study, userText, [], SYSTEM_SYNTH);
+    }
+
+    // ── Batch pass: analyse ONE batch of full-resolution montages (a portion of the study) ──
+    const images: string[] = Array.isArray(body?.images) ? body.images.slice(0, 12) : [];
+    const views: string[] = Array.isArray(body?.views) ? body.views.map((v: any) => String(v)) : [];
+    study.sampled = images.length;
+    const viewList = views.length ? views.map((v, i) => `montage ${i + 1} = ${v} view`).join("; ") : `${images.length} montage(s)`;
+    const userText =
+      `Modality: ${study.modality}. These ${images.length} montage image(s) show a PORTION of the study, grouped by view (${viewList}). Each tile is one full-resolution slice; the small number on a tile is its slice index. Describe ONLY what is visible in these montages — findings per view with slice numbers, and note which slice numbers are worth keeping as key images. Be specific; another pass will merge everything.`;
+    return provider === "gemini" ? await gemini(study, userText, images) : await openai(study, userText, images);
   } catch (e: any) {
     const raw = String(e?.message || e);
     let msg: string;
-    if (e?.name === "AbortError") {
-      msg = "Timed out waiting for the model. Try again or use fewer images.";
-    } else if (/fetch failed|ECONNREFUSED|ENOTFOUND|terminated|network/i.test(raw)) {
-      msg = "Couldn't reach the AI model. The Colab runtime is likely asleep or not started — run the notebook (Run all), then retry.";
-    } else {
-      msg = `Request failed: ${raw}`;
-    }
+    if (e?.name === "AbortError") msg = "Timed out waiting for the model. Try again.";
+    else if (/fetch failed|ECONNREFUSED|ENOTFOUND|terminated|network/i.test(raw)) msg = "Couldn't reach the AI model. The Colab runtime is likely asleep or not started — run the notebook (Run all), then retry.";
+    else msg = `Request failed: ${raw}`;
     return NextResponse.json({ connected: false, study, message: msg });
   }
 }
@@ -70,7 +81,7 @@ function dataUrlParts(u: string) {
   return m ? { mime: m[1], data: m[2] } : null;
 }
 
-async function gemini(study: any, userText: string, images: string[]) {
+async function gemini(study: any, userText: string, images: string[], system: string = SYSTEM) {
   const key = process.env.GEMINI_API_KEY?.trim();
   const model = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
   if (!key) {
@@ -80,7 +91,7 @@ async function gemini(study: any, userText: string, images: string[]) {
     });
   }
   // Gemma models have no system role — fold instructions into the user turn (works for Gemini too).
-  const parts: any[] = [{ text: `${SYSTEM}\n\n${userText}` }];
+  const parts: any[] = [{ text: `${system}\n\n${userText}` }];
   for (const u of images.slice(0, 16)) { const p = dataUrlParts(u); if (p) parts.push({ inline_data: { mime_type: p.mime, data: p.data } }); }
 
   const controller = new AbortController();
@@ -109,7 +120,7 @@ function friendlyErr(t: string): string {
   return t.slice(0, 240);
 }
 
-async function openai(study: any, userText: string, images: string[]) {
+async function openai(study: any, userText: string, images: string[], system: string = SYSTEM) {
   const endpoint = await resolveEndpoint();
   const model = process.env.MEDGEMMA_MODEL?.trim() || "medgemma";
   const token = process.env.HF_TOKEN?.trim();
@@ -134,7 +145,7 @@ async function openai(study: any, userText: string, images: string[]) {
         method: "POST", headers, signal: controller.signal,
         body: JSON.stringify({
           model,
-          messages: [{ role: "system", content: SYSTEM }, { role: "user", content: userText, images: imgs }],
+          messages: [{ role: "system", content: system }, { role: "user", content: userText, images: imgs }],
           stream: false,
           options: { num_ctx: numCtx, temperature: 0.2, num_predict: 1200 },
         }),
@@ -151,7 +162,7 @@ async function openai(study: any, userText: string, images: string[]) {
     for (const u of images) content.push({ type: "image_url", image_url: { url: u } });
     const r = await fetch(endpoint, {
       method: "POST", headers, signal: controller.signal,
-      body: JSON.stringify({ model, messages: [{ role: "system", content: SYSTEM }, { role: "user", content: images.length ? content : userText }], max_tokens: 1200, temperature: 0.2, stream: false }),
+      body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: images.length ? content : userText }], max_tokens: 1200, temperature: 0.2, stream: false }),
     });
     if (r.status === 503) return NextResponse.json({ connected: false, study, message: "Endpoint waking up (cold start). Wait ~1 min and retry." });
     if (!r.ok) { const t = await r.text().catch(() => ""); return NextResponse.json({ connected: false, study, message: `Endpoint error ${r.status}. ${friendlyErr(t)}` }); }

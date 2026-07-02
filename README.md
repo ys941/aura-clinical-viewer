@@ -200,10 +200,11 @@ The public MedGemma GGUF loads **text‑only** in Ollama (rude), so Aura uses Ol
 A CT can be **hundreds of slices**. Sending them one‑by‑one = huge, slow, sad. So Aura plays it smart with **view‑grouped montages** — and covers **every single slice**:
 
 1. **Group by view** — each slice is bucketed into its anatomical plane (Axial / Coronal / Sagittal), derived from the DICOM `ImageOrientationPatient`. No 3D orientation (X‑ray/US)? Each acquisition stays its own projection.
-2. **Tile every slice** — all of a view's slices are packed into montage grids, each with a **banner naming the view** and every tile stamped with its **slice number**. Nothing is sampled away.
-3. **Bound the images, not the coverage** — the number of montage *images* is kept sane (grids get **denser** for big studies) so it stays one manageable request, while **no slice is dropped**.
+2. **Tile every slice at high resolution** — all of a view's slices are packed into montage grids (a few slices per grid, **large tiles** for fine detail), each with a **banner naming the view** and every tile stamped with its **slice number**. Nothing is sampled away.
+3. **Analyze in batches** — the montages go to the model in small batches (few images each), so **every slice is read at full detail** instead of squashed into one request. Each batch returns partial findings.
+4. **Synthesize** — a final pass merges all the batch notes into one clean report (Technique · per‑view Findings · Impression · Key Images), de‑duplicating across batches.
 
-Each montage is ~256 vision tokens, so the model peeps the *entire* study across a handful of grids — and reports **per view**, citing the slice numbers it saw. **Every slice, grouped by view** — with a colorful rotating ring + progress bar so you're never left guessing. 🔓
+Result: **every slice, at high resolution, grouped by view** — a few requests instead of one, with a colorful rotating ring + "batch k/N" progress so you're never guessing. Accuracy over shortcuts. 🔬 (Bigger studies take longer — that's the honest cost of reading everything properly.)
 
 ---
 

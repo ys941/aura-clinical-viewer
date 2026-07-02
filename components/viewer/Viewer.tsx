@@ -503,15 +503,10 @@ export default function Viewer() {
     // WHOLE study — EVERY slice is included (nothing is sampled away). Slices are packed
     // into montage grids per view. To keep it one manageable request, the number of montage
     // IMAGES is bounded by densifying the grids for large studies — slices are never dropped.
-    const N = study.imageIds.length;
-    const BUDGET = 9;  // montage images per request — kept modest so it fits the model context (~256 tokens/image)
-    let per = 16;      // slices per montage — start readable (4×4), pack denser if needed
-    const montagesAt = (p: number) => order.reduce((a, k) => a + Math.max(1, Math.ceil(groups.get(k)!.idxs.length / p)), 0);
-    if (montagesAt(per) > BUDGET) per = Math.max(16, Math.ceil(N / BUDGET));
-    const cols = Math.ceil(Math.sqrt(per));
-    const rows = Math.ceil(per / cols);
-    // Keep each montage ≤ ~768px so the vision model tokenizes it to ~one 256-token image.
-    const tile = Math.max(96, Math.min(220, Math.floor(768 / cols)));
+    // High-resolution montages: only a few slices per grid at large tiles, so the model sees
+    // fine detail. Every slice is tiled (no budget cap) — runAi sends these in batches and
+    // merges the results, so full-study coverage AND resolution are preserved.
+    const per = 9, cols = 3, rows = 3, tile = 300;
     const HEAD = 26;
 
     const off = document.createElement("div");
@@ -601,31 +596,45 @@ export default function Viewer() {
     if (!study) return;
     setAi({ loading: true }); setAiProgress({ done: 0, total: 1, phase: "Preparing" });
     try {
+      // 1) Render every slice into high-resolution montages (grouped by view).
       const { images, labels } = await buildStudyMontages();
-      setAiProgress({ done: 1, total: 1, phase: "Analyzing with MedGemma" });
-      const res = await fetch("/api/analyze", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: study.name, modality: study.modality, imageCount: study.imageIds.length, seriesCount: study.series.length, montages: images.length, views: labels, images }),
-      });
-      const data = await res.json();
-      if (data.connected && data.text) {
-        const cv = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
-        setSnapshot(cv ? cv.toDataURL("image/png") : "");
-        const t: string = data.text;
-        // split the AI output into Technique / Findings / Impression for the editable report
-        const parts = splitAiReport(t);
-        setReportTechnique(parts.technique);
-        setReportFindings(parts.findings || t);
-        setReportImpression(parts.impression);
-        // capture the exact slices the model called out as "Key Images"
-        setAiProgress({ done: 0, total: 1, phase: "Capturing key images" });
-        try { setKeyImages(await renderKeyImages(parseKeyImageRefs(t))); } catch { setKeyImages([]); }
-        setAiProgress(null);
-        setAi({ loading: false, connected: true, text: t });
-        setShowReport(true); // auto-open the beautiful, editable report
-        toast("AI analysis complete — report ready");
+      if (!images.length) { setAiProgress(null); setAi({ loading: false, connected: false, message: "Couldn't render the study." }); return; }
+
+      const meta = { name: study.name, modality: study.modality, imageCount: study.imageIds.length, seriesCount: study.series.length };
+      const post = (payload: any) => fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then((r) => r.json());
+
+      // 2) Analyze in batches (few images each) so every slice is read at full detail.
+      const BATCH = 6;
+      const batches = Math.ceil(images.length / BATCH);
+      const notes: string[] = [];
+      let lastError = "";
+      for (let b = 0; b < batches; b++) {
+        setAiProgress({ done: b, total: batches + 1, phase: `Analyzing batch ${b + 1}/${batches}` });
+        const from = b * BATCH, to = from + BATCH;
+        const data = await post({ mode: "batch", ...meta, views: labels.slice(from, to), images: images.slice(from, to) });
+        if (data?.connected && data?.text) notes.push(data.text);
+        else if (data?.message) lastError = data.message;
       }
-      else { setAiProgress(null); setAi({ loading: false, connected: false, message: data.message || "No response." }); }
+      if (!notes.length) { setAiProgress(null); setAi({ loading: false, connected: false, message: lastError || "No findings returned. Is the AI model running? (check the health badge)" }); return; }
+
+      // 3) Merge the batch notes into one final report.
+      setAiProgress({ done: batches, total: batches + 1, phase: notes.length > 1 ? "Synthesizing report" : "Formatting report" });
+      const sdata = await post({ mode: "synthesize", ...meta, notes });
+      const finalText: string = (sdata?.connected && sdata?.text) ? sdata.text : notes.join("\n\n");
+
+      const cv = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
+      setSnapshot(cv ? cv.toDataURL("image/png") : "");
+      const parts = splitAiReport(finalText);
+      setReportTechnique(parts.technique);
+      setReportFindings(parts.findings || finalText);
+      setReportImpression(parts.impression);
+      // 4) Capture the exact slices the report called out as "Key Images".
+      setAiProgress({ done: batches + 1, total: batches + 1, phase: "Capturing key images" });
+      try { setKeyImages(await renderKeyImages(parseKeyImageRefs(finalText))); } catch { setKeyImages([]); }
+      setAiProgress(null);
+      setAi({ loading: false, connected: true, text: finalText });
+      setShowReport(true); // auto-open the beautiful, editable report
+      toast(`AI analysis complete — ${batches} batch${batches > 1 ? "es" : ""} · report ready`);
     } catch (e: any) { setAiProgress(null); setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
   }
 
