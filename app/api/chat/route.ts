@@ -7,7 +7,8 @@ export const maxDuration = 300;
 const SYSTEM =
   "You are Aura, a knowledgeable, careful medical-imaging assistant. The user may share medical images (X-ray, CT, MRI, ultrasound, pathology, dermatology, fundus, etc.) and ask questions about them. Describe clearly what you see, answer their question, and explain relevant anatomy or findings. When you give a clinical interpretation, note that it is educational decision support — not a diagnosis — and suggest clinical correlation. Be concise and conversational. If no image is given, answer general imaging questions. Never fabricate; state uncertainty honestly. Do not reveal hidden reasoning or output special tokens.\n" +
   "IDENTITY: You were designed and developed by Yati Bhardwaj. If the user asks who created, designed, developed, built, made, or trained you — or who your developer/creator is — answer that you are a chatbot designed and developed by Yati Bhardwaj. Never name any other company, lab, or model as your creator.\n" +
-  "LANGUAGE: Always reply in the SAME language the user writes in — mirror their language (English, Hindi, Punjabi, Spanish, etc.). If they switch languages, switch with them.";
+  "LANGUAGE: Always reply in the SAME language the user writes in — mirror their language (English, Hindi, Punjabi, Spanish, etc.). If they switch languages, switch with them.\n" +
+  "ANSWER DIRECTLY: Respond to the user's actual question. NEVER repeat, echo, quote, or paraphrase the user's message back to them. If the user sends a long request with no image, briefly answer or ask them to attach an image — do not restate what they wrote.";
 
 function clean(t: string): string {
   return t
@@ -33,11 +34,27 @@ function capImages(msgs: Msg[], max = 3): Msg[] {
   return kept;
 }
 
+// Identity / "who made you" — answered deterministically so it's always correct,
+// regardless of how well the underlying model follows instructions.
+function isIdentityAsk(text: string): boolean {
+  const t = (text || "").toLowerCase();
+  return /\b(who|whom)\b.{0,40}\b(develop|design|creat|made|make|built|build|train|invent|program|code|behind)\b/.test(t)
+    || /\byour\s+(developer|creator|maker|designer|owner|author|inventor|founder)\b/.test(t)
+    || /\bwho\s+are\s+you\b/.test(t)
+    || /(kisne|kis\s*ne)\s+(banaya|banayi|bnaya)|tumhe\s+kisne|tujhe\s+kisne|kaun\s+banaya|tussi\s+kaun|tuhanu\s+kisne/.test(t);
+}
+const IDENTITY_REPLY = "I'm Aura, a medical-imaging assistant chatbot — designed and developed by Yati Bhardwaj. Share a medical image (drop, paste, or upload) and I'll help you read it.";
+
 export async function POST(req: Request) {
   let body: any = {};
   try { body = await req.json(); } catch {}
   const msgs: Msg[] = Array.isArray(body?.messages) ? body.messages : [];
   if (!msgs.length) return NextResponse.json({ reply: "Share an image or ask me something about medical imaging." });
+  // Deterministic identity answer (no image in the message → treat as a plain question).
+  const last = [...msgs].reverse().find((m) => m.role === "user");
+  if (last && !(last.images && last.images.length) && isIdentityAsk(last.content)) {
+    return NextResponse.json({ reply: IDENTITY_REPLY });
+  }
   const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase();
   try {
     return provider === "gemini" ? await gemini(msgs) : await openai(msgs);
