@@ -13,6 +13,7 @@ import {
   RefreshCw, Play, Pause, Copy, Sparkles, FileText, Trash2, Upload, X,
   ChevronLeft, ChevronRight, Loader2, CheckCircle2, Plug, Download, Film, Layers, Tag,
   Maximize2, Minimize2, Rows3, PanelLeft, PanelRight, Keyboard, Eye, EyeOff, Activity,
+  Plus, ListChecks,
 } from "lucide-react";
 
 const ACCEPT = ".dcm,.dicom,.ima,.png,.jpg,.jpeg,.gif,.bmp,.webp,.tif,.tiff,.zip,application/dicom,image/*,application/zip";
@@ -182,6 +183,7 @@ const SHORTCUTS: [string, string][] = [
   ["I", "Invert"],
   ["O", "Toggle overlays"],
   ["F", "Full screen"],
+  ["P", "Pin slice for focused AI"],
   ["1 – 9, 0", "Select tool"],
   ["?", "This help"],
 ];
@@ -219,6 +221,9 @@ export default function Viewer() {
   const [reportRecs, setReportRecs] = useState("");
   const [reportHistory, setReportHistory] = useState("");
   const [askAi, setAskAi] = useState(false);
+  const [aiPicks, setAiPicks] = useState<string[]>([]); // imageIds hand-picked for focused analysis
+  const [aiMode, setAiMode] = useState<"study" | "selected">("study");
+  const [showPicks, setShowPicks] = useState(false);
   const [snapshot, setSnapshot] = useState("");
   const [keyImages, setKeyImages] = useState<KeyImage[]>([]);
   const [exporting, setExporting] = useState<number | null>(null);
@@ -242,6 +247,8 @@ export default function Viewer() {
     () => (study ? study.series.find((s) => s.id === activeSeriesId) || study.series[0] || null : null),
     [study, activeSeriesId]
   );
+
+  useEffect(() => { setAiPicks([]); setShowPicks(false); }, [study?.id]);
 
   function toast(msg: string, tone: "ok" | "info" = "ok") {
     const id = ++toastSeq.current;
@@ -426,12 +433,13 @@ export default function Viewer() {
       else if (e.key.toLowerCase() === "i") invert();
       else if (e.key.toLowerCase() === "o") setShowOverlays((v) => !v);
       else if (e.key.toLowerCase() === "f") toggleFullscreen();
+      else if (e.key.toLowerCase() === "p") { e.preventDefault(); togglePick(); }
       else if (/^[0-9]$/.test(e.key)) { const idx = e.key === "0" ? 9 : +e.key - 1; if (TOOLS[idx]) selectTool(TOOLS[idx].name); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [study, showExport, showReport, showHelp, activeSeries, fullscreen, fps]);
+  }, [study, showExport, showReport, showHelp, activeSeries, index, fullscreen, fps]);
 
   async function onFiles(files: File[]) {
     if (!apiRef.current) return;
@@ -703,19 +711,60 @@ export default function Viewer() {
     return { images, labels };
   }
 
+  // Pin / unpin the current slice for focused, full-resolution AI analysis.
+  const currentImageId = activeSeries ? activeSeries.imageIds[index] : "";
+  const currentPicked = !!currentImageId && aiPicks.includes(currentImageId);
+  function togglePick() {
+    if (!currentImageId) return;
+    setAiPicks((p) => (p.includes(currentImageId) ? p.filter((x) => x !== currentImageId) : [...p, currentImageId]));
+  }
+
+  // Render the hand-picked images at FULL 896 (CT = 3-window RGB) for careful analysis.
+  async function buildSelectedImages(picks: string[]): Promise<{ images: string[]; labels: string[] }> {
+    const api = apiRef.current, main = elRef.current;
+    if (!api || !study || !picks.length) return { images: [], labels: [] };
+    const cs = api.cornerstone;
+    const isCT = /\bCT\b|CTA|CTCA|angio/i.test(`${study.modality} ${study.dict?.["Modality"] || ""}`);
+    const off = document.createElement("div");
+    off.style.cssText = `position:fixed;left:-10000px;top:0;width:896px;height:896px;`;
+    document.body.appendChild(off);
+    const images: string[] = [], labels: string[] = [];
+    try {
+      cs.enable(off);
+      const mainVp = main ? cs.getViewport(main) : null;
+      let done = 0;
+      setAiProgress({ done: 0, total: picks.length, phase: "Rendering selected images" });
+      for (const id of picks) {
+        const gi = study.imageIds.indexOf(id);
+        const c = isCT ? await renderCtRgb(cs, off, id, 896) : await renderSlice(cs, off, id, 896, mainVp);
+        if (picks.length > 1 && gi >= 0) stampNum(c, gi + 1);
+        images.push(c.toDataURL("image/jpeg", 0.92));
+        labels.push(planeOfImage(cs, id) || "");
+        setAiProgress({ done: ++done, total: picks.length, phase: "Rendering selected images" });
+      }
+    } catch (e) { console.warn("selected render error", e); }
+    finally { try { cs.disable(off); } catch {} off.remove(); }
+    return { images, labels };
+  }
+
   // The AI asks for clinical history first (better, targeted report) — user can skip.
   function runAi() {
     if (!study || ai.loading) return;
-    setAskAi(true);
+    setAiMode("study"); setAskAi(true);
+  }
+  function runAiSelected() {
+    if (!study || ai.loading || !aiPicks.length) return;
+    setAiMode("selected"); setShowPicks(false); setAskAi(true);
   }
 
   async function startAnalysis(history: string) {
     if (!study) return;
+    const selected = aiMode === "selected" && aiPicks.length > 0;
     setReportHistory(history);
     setAi({ loading: true }); setAiProgress({ done: 0, total: 1, phase: "Preparing" });
     try {
-      // 1) Render every slice into high-resolution montages (grouped by view).
-      const { images, labels } = await buildStudyMontages();
+      // 1) Render the images: hand-picked (full-res) or the whole study (grouped montages).
+      const { images, labels } = selected ? await buildSelectedImages(aiPicks) : await buildStudyMontages();
       if (!images.length) { setAiProgress(null); setAi({ loading: false, connected: false, message: "Couldn't render the study." }); return; }
 
       const meta = { name: study.name, modality: study.modality, imageCount: study.imageIds.length, seriesCount: study.series.length, history };
@@ -742,7 +791,8 @@ export default function Viewer() {
 
       // 4) High-resolution confirmation pass — re-read the impression/key slices at full 896
       //    (CT = 3-window RGB) and let the model correct/confirm the report on a closer look.
-      const keyRefs = parseKeyImageRefs(finalText);
+      //    Skipped for hand-picked analysis (those images were already read at full resolution).
+      const keyRefs = selected ? [] : parseKeyImageRefs(finalText);
       if (keyRefs.length) {
         setAiProgress({ done: batches + 1, total: batches + 2, phase: `Re-reading ${keyRefs.length} key image(s) at high resolution` });
         try {
@@ -767,7 +817,7 @@ export default function Viewer() {
       setAiProgress(null);
       setAi({ loading: false, connected: true, text: finalText });
       setShowReport(true); // auto-open the beautiful, editable report
-      toast(`AI analysis complete — ${batches} batch${batches > 1 ? "es" : ""} + high-res recheck · report ready`);
+      toast(selected ? `AI read ${aiPicks.length} selected image(s) at full resolution · report ready` : `AI analysis complete — ${batches} batch${batches > 1 ? "es" : ""} + high-res recheck · report ready`);
     } catch (e: any) { setAiProgress(null); setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
   }
 
@@ -844,7 +894,31 @@ export default function Viewer() {
           </>)}
           <button onClick={copyImage} title="Copy image" className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-navy-850 px-2 py-1.5 text-xs text-slate-200 hover:bg-white/10"><Copy className="h-3.5 w-3.5" />Copy</button>
           {total > 1 && <button onClick={() => setShowExport(true)} disabled={exporting !== null} title="Export run / slides" className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-navy-850 px-2 py-1.5 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-60">{exporting !== null ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Film className="h-3.5 w-3.5" />}{exporting !== null ? `${exporting}%` : "Export"}</button>}
-          <button onClick={runAi} disabled={ai.loading} className="flex items-center gap-1.5 rounded-lg border border-teal-500/30 bg-teal-500/10 px-2 py-1.5 text-xs font-medium text-teal-300 hover:bg-teal-500/15 disabled:opacity-60">{ai.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}AI</button>
+          {/* Pin the current slice for focused, full-resolution AI analysis */}
+          <button onClick={togglePick} title={currentPicked ? "Remove this slice from the AI selection" : "Pin this slice for focused, full-resolution AI analysis"}
+            className={cn("flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition", currentPicked ? "border-amber-500/40 bg-amber-500/15 text-amber-300" : "border-white/10 bg-navy-850 text-slate-300 hover:bg-white/10")}>
+            {currentPicked ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}Pin
+          </button>
+          {aiPicks.length > 0 && (
+            <div className="relative">
+              <button onClick={() => setShowPicks((v) => !v)} title="Review pinned images" className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/15"><ListChecks className="h-3.5 w-3.5" />{aiPicks.length}</button>
+              {showPicks && (<>
+                <div className="fixed inset-0 z-10" onClick={() => setShowPicks(false)} />
+                <div className="absolute bottom-11 right-0 z-20 w-64 panel p-2">
+                  <div className="mb-1 flex items-center justify-between px-1"><span className="text-[11px] font-semibold text-white">Pinned for AI · {aiPicks.length}</span><button onClick={() => { setAiPicks([]); setShowPicks(false); }} className="text-[11px] text-slate-400 hover:text-critical">Clear all</button></div>
+                  <div className="max-h-56 space-y-0.5 overflow-y-auto">
+                    {aiPicks.map((id) => { const gi = study.imageIds.indexOf(id); return (
+                      <div key={id} className="flex items-center justify-between rounded-md px-2 py-1 text-xs text-slate-300 hover:bg-white/5">
+                        <span>Image {gi + 1}{planeOfImage(apiRef.current!.cornerstone, id) ? ` · ${planeOfImage(apiRef.current!.cornerstone, id)}` : ""}</span>
+                        <button onClick={() => setAiPicks((p) => p.filter((x) => x !== id))} className="text-slate-500 hover:text-critical"><X className="h-3 w-3" /></button>
+                      </div>); })}
+                  </div>
+                  <button onClick={runAiSelected} disabled={ai.loading} className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/15 px-2 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/25 disabled:opacity-60"><Sparkles className="h-3.5 w-3.5" />Analyze {aiPicks.length} at full res</button>
+                </div>
+              </>)}
+            </div>
+          )}
+          <button onClick={runAi} disabled={ai.loading} title="Analyze the whole study" className="flex items-center gap-1.5 rounded-lg border border-teal-500/30 bg-teal-500/10 px-2 py-1.5 text-xs font-medium text-teal-300 hover:bg-teal-500/15 disabled:opacity-60">{ai.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}AI</button>
           <button onClick={() => openReport()} className="flex items-center gap-1.5 rounded-lg bg-medical-600 px-2 py-1.5 text-xs font-medium text-white hover:bg-medical-500"><FileText className="h-3.5 w-3.5" />Report</button>
         </div>
       </div>
@@ -966,7 +1040,7 @@ export default function Viewer() {
           onCopy={() => { navigator.clipboard?.writeText(ai.text || ""); toast("Findings copied"); }}
           onReport={() => { setShowAiResult(false); openReport(ai.text || ""); }} />
       )}</AnimatePresence>
-      <AnimatePresence>{askAi && study && <AskHistoryModal study={study} onGo={(h) => { setAskAi(false); startAnalysis(h); }} onClose={() => setAskAi(false)} />}</AnimatePresence>
+      <AnimatePresence>{askAi && study && <AskHistoryModal study={study} focus={aiMode === "selected" ? aiPicks.length : 0} onGo={(h) => { setAskAi(false); startAnalysis(h); }} onClose={() => setAskAi(false)} />}</AnimatePresence>
       <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} initialFindings={reportFindings} initialImpression={reportImpression} initialTechnique={reportTechnique} initialRecs={reportRecs} initialHistory={reportHistory} keyImages={keyImages} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
       <AnimatePresence>{showExport && activeSeries && <ExportModal seriesName={activeSeries.name} total={total} current={index + 1} fps={fps} onClose={() => setShowExport(false)} onExport={exportRun} />}</AnimatePresence>
     </div>
@@ -1171,20 +1245,22 @@ function ExportModal({ seriesName, total, current, fps, onClose, onExport }: { s
 }
 
 // Pre-analysis question: clinical history sharpens the read; fully skippable.
-function AskHistoryModal({ study, onGo, onClose }: { study: LoadedStudy; onGo: (history: string) => void; onClose: () => void }) {
+function AskHistoryModal({ study, focus = 0, onGo, onClose }: { study: LoadedStudy; focus?: number; onGo: (history: string) => void; onClose: () => void }) {
   const [h, setH] = useState("");
   const chips = ["Chest pain", "Trauma", "Fever / infection", "Follow-up", "Screening", "Shortness of breath", "Post-operative"];
   const m = study.modality.toUpperCase();
-  const note = /X.?RAY|CR|DX|DR|MG|US|OP|SM|DERM|FUND/.test(m) || study.imageIds.length <= 4
-    ? "This is the model's strongest input type — read at full resolution."
-    : /CT|MR|MRI/.test(m)
-      ? "CT/MRI support is early (~60–65% on findings) — treat this as a second look, not a diagnosis."
-      : "Decision support only — verify against the full study.";
+  const note = focus > 0
+    ? `Reading your ${focus} selected image(s) at full 896 resolution — the model's most careful, highest-accuracy mode.`
+    : /X.?RAY|CR|DX|DR|MG|US|OP|SM|DERM|FUND/.test(m) || study.imageIds.length <= 4
+      ? "This is the model's strongest input type — read at full resolution."
+      : /CT|MR|MRI/.test(m)
+        ? "CT/MRI support is early (~60–65% on findings) — treat this as a second look, not a diagnosis."
+        : "Decision support only — verify against the full study.";
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} onClick={(e) => e.stopPropagation()} className="w-full max-w-md panel p-0">
         <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
-          <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-teal-300" /><span className="text-sm font-semibold text-white">Before I read this {study.modality} study…</span></div>
+          <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-teal-300" /><span className="text-sm font-semibold text-white">{focus > 0 ? `Before I read your ${focus} selected image(s)…` : `Before I read this ${study.modality} study…`}</span></div>
           <button onClick={onClose} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button>
         </div>
         <div className="space-y-3 p-5">
