@@ -7,8 +7,10 @@ export async function POST(req: Request) {
   let body: any = {};
   try { body = await req.json(); } catch {}
   const provider = String(body?.provider || "").toLowerCase();
-  const key = String(body?.key || "").trim();
-  if (!key) return NextResponse.json({ models: [], error: "No API key." });
+  // Prefer the key from Settings; fall back to server env so keys can live ONLY in .env.local.
+  const envKey = provider === "gemini" ? process.env.GEMINI_API_KEY : provider === "groq" ? process.env.GROQ_API_KEY : "";
+  const key = (String(body?.key || "").trim() || envKey || "").trim();
+  if (!key) return NextResponse.json({ models: [] }); // no key anywhere — let the UI show a manual input
 
   try {
     if (provider === "gemini") {

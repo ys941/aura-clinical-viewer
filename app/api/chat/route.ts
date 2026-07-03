@@ -62,6 +62,12 @@ export async function POST(req: Request) {
   const groqKey = typeof body?.groqKey === "string" ? body.groqKey.trim() : "";
   const groqModel = typeof body?.groqModel === "string" ? body.groqModel.trim() : "";
   try {
+    // Images always go to a vision model: Gemini first, then MedGemma. (Groq text models can't see.)
+    const hasImages = msgs.some((m) => (m.images || []).length);
+    if (hasImages && provider !== "gemini") {
+      if (geminiKey || process.env.GEMINI_API_KEY) return await gemini(msgs, geminiKey, geminiModel);
+      return await openai(msgs); // MedGemma can also read images; returns a clear message if not configured
+    }
     if (provider === "gemini") return await gemini(msgs, geminiKey, geminiModel);
     if (provider === "groq") return await groq(msgs, groqKey, groqModel);
     return await openai(msgs);
@@ -116,13 +122,11 @@ async function groq(msgs: Msg[], keyOverride = "", modelOverride = "") {
   const key = keyOverride || process.env.GROQ_API_KEY?.trim() || "";
   const model = modelOverride || process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile";
   if (!key) return NextResponse.json({ reply: "No Groq API key set. Add it in Settings → AI Assistant (or say “my groq key is …”). Get a free key at console.groq.com/keys." });
-  const capped = capImages(msgs.slice(-8), 3);
-  const hasImages = capped.some((m) => (m.images || []).length);
-  const messages = [{ role: "system", content: SYSTEM }, ...capped.map((m) => {
-    const content: any[] = [{ type: "text", text: m.content || "" }];
-    for (const u of (m.images || [])) content.push({ type: "image_url", image_url: { url: u } });
-    return { role: m.role === "assistant" ? "assistant" : "user", content: (m.images && m.images.length) ? content : (m.content || "") };
-  })];
+  // Groq (Llama) is used for TEXT here — content must be a plain string. Image turns get a note.
+  const messages = [{ role: "system", content: SYSTEM }, ...msgs.slice(-8).map((m) => ({
+    role: m.role === "assistant" ? "assistant" : "user",
+    content: String(m.content || "") + ((m.images && m.images.length) ? " [an image was attached — image questions are answered by Gemini/MedGemma]" : ""),
+  }))];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120_000);
   try {
@@ -130,11 +134,7 @@ async function groq(msgs: Msg[], keyOverride = "", modelOverride = "") {
       method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, signal: controller.signal,
       body: JSON.stringify({ model, messages, max_tokens: 800, temperature: 0.3, stream: false }),
     });
-    if (!r.ok) {
-      const t = await r.text().catch(() => "");
-      const hint = hasImages && /vision|image|multimodal|not support/i.test(t) ? " (this Groq model has no vision — pick a vision model for images)" : "";
-      return NextResponse.json({ reply: `Groq error ${r.status}.${hint} ${t.slice(0, 160)}` });
-    }
+    if (!r.ok) { const t = await r.text().catch(() => ""); return NextResponse.json({ reply: `Groq error ${r.status}. ${t.slice(0, 180)}` }); }
     const data = await r.json();
     return NextResponse.json({ reply: clean(data?.choices?.[0]?.message?.content || "") || "(no response)" });
   } finally { clearTimeout(timer); }

@@ -49,13 +49,13 @@ export default function SettingsPage() {
     const s = getChatSettings();
     setChatProvider(s.provider); setGeminiKey(s.geminiKey); setGeminiModel(s.geminiModel);
     setGroqKey(s.groqKey); setGroqModel(s.groqModel);
-    if (s.geminiKey) loadModels("gemini", s.geminiKey);
-    if (s.groqKey) loadModels("groq", s.groqKey);
+    // Load models (uses the entered key, or the server's .env key as a fallback).
+    if (s.geminiKey || s.provider === "gemini") loadModels("gemini", s.geminiKey);
+    if (s.groqKey || s.provider === "groq") loadModels("groq", s.groqKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadModels(provider: "gemini" | "groq", key: string) {
-    if (!key.trim()) { setModelErr("Enter the API key first, then load models."); return; }
     setLoadingModels(provider); setModelErr("");
     try {
       const r = await fetch("/api/models", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key: key.trim() }) });
@@ -232,8 +232,11 @@ export default function SettingsPage() {
 
           <div className="flex items-center gap-3">
             <button onClick={saveChat} className="btn-primary">{chatSaved ? <Check className="h-4 w-4" /> : null}{chatSaved ? "Saved" : "Save assistant settings"}</button>
-            <span className="text-xs text-slate-500">Stored only in this browser. You can also say “use groq”, “my key is …”.</span>
           </div>
+          <p className="text-[11px] leading-relaxed text-slate-500">
+            🔒 Keys entered here are stored <b>only in this browser</b> and sent <b>only to your own server</b> (never directly to Google/Groq from the browser, never in the app bundle).
+            Want keys to <b>never touch the browser</b>? Put <code className="text-slate-400">GEMINI_API_KEY</code> / <code className="text-slate-400">GROQ_API_KEY</code> in <code className="text-slate-400">.env.local</code> and leave these blank — the models still load.
+          </p>
         </div>
       </Panel>
 
