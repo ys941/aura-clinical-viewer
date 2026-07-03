@@ -33,6 +33,7 @@ Viewer controls (the image viewer). Use action "viewer" with params {"command": 
 - "pin", value: add | clear   (pin the current slice for focused AI, or clear all pins)
 - "analyze", value: study | pinned
 - "report"        (open the report)
+- "upload"        (open the file picker to load a new study)
 
 Respond with JSON ONLY, matching:
 {"action":"set_profile"|"set_letterhead"|"set_chat_model"|"viewer"|"answer","params":{ ...only the fields/command to change... },"reply":"<one short sentence confirming what you did, or your normal answer — in the SAME language the user wrote in>"}
@@ -99,7 +100,7 @@ export async function POST(req: Request) {
       if (typeof p.geminiModel === "string" && p.geminiModel.trim()) params.geminiModel = p.geminiModel.trim().slice(0, 60);
       if (typeof p.groqModel === "string" && p.groqModel.trim()) params.groqModel = p.groqModel.trim().slice(0, 60);
     } else if (action === "viewer") {
-      const cmds = ["window", "brightness", "contrast", "wheel", "tool", "zoom", "rotate", "flip", "invert", "overlays", "panel", "fullscreen", "reset", "clear", "copy", "cine", "fps", "navigate", "series", "pin", "analyze", "report"];
+      const cmds = ["window", "brightness", "contrast", "wheel", "tool", "zoom", "rotate", "flip", "invert", "overlays", "panel", "fullscreen", "reset", "clear", "copy", "cine", "fps", "navigate", "series", "pin", "analyze", "report", "upload"];
       if (cmds.includes(p.command)) {
         params.command = p.command;
         if (typeof p.value === "string") params.value = p.value.trim().toLowerCase().slice(0, 20);

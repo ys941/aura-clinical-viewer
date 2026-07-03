@@ -503,6 +503,7 @@ export default function Viewer() {
         case "pin": { if (val === "clear") setAiPicks([]); else togglePick(); break; }
         case "analyze": { if (val === "pinned") runAiSelected(); else runAi(); break; }
         case "report": openReport(); break;
+        case "upload": { stopCine(); setStudy(null); break; }
       }
     };
   });
