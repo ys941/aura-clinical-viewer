@@ -44,14 +44,20 @@ export default function SettingsPage() {
   const [groqModels, setGroqModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState<"" | "gemini" | "groq">("");
   const [modelErr, setModelErr] = useState("");
+  const [serverKeys, setServerKeys] = useState<{ gemini: boolean; groq: boolean }>({ gemini: false, groq: false });
 
   useEffect(() => {
     const s = getChatSettings();
     setChatProvider(s.provider); setGeminiKey(s.geminiKey); setGeminiModel(s.geminiModel);
     setGroqKey(s.groqKey); setGroqModel(s.groqModel);
+    fetch("/api/settings-keys").then((r) => r.json()).then((d) => {
+      setServerKeys({ gemini: !!d?.gemini, groq: !!d?.groq });
+      if (d?.geminiModel && !s.geminiModel) setGeminiModel(d.geminiModel);
+      if (d?.groqModel && !s.groqModel) setGroqModel(d.groqModel);
+    }).catch(() => {});
     // Load models (uses the entered key, or the server's .env key as a fallback).
-    if (s.geminiKey || s.provider === "gemini") loadModels("gemini", s.geminiKey);
-    if (s.groqKey || s.provider === "groq") loadModels("groq", s.groqKey);
+    loadModels("gemini", s.geminiKey);
+    loadModels("groq", s.groqKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -66,13 +72,23 @@ export default function SettingsPage() {
     } catch (e: any) { setModelErr(String(e?.message || e)); } finally { setLoadingModels(""); }
   }
 
-  function saveChat() {
+  async function saveChat() {
+    // Keys go to the SERVER (.env.local); only the non-secret provider + model choice stays local.
+    try {
+      const r = await fetch("/api/settings-keys", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ geminiKey: geminiKey.trim(), groqKey: groqKey.trim(), geminiModel: geminiModel.trim(), groqModel: groqModel.trim() }) });
+      const d = await r.json();
+      setServerKeys({ gemini: !!d?.gemini, groq: !!d?.groq });
+      if (d?.note) setModelErr(d.note);
+    } catch { setModelErr("Couldn't reach the server to save keys."); }
+    // Never keep the key values in the browser.
     setChatSettings({
-      provider: chatProvider,
-      geminiKey: geminiKey.trim(), geminiModel: geminiModel.trim() || "gemini-2.5-flash",
-      groqKey: groqKey.trim(), groqModel: groqModel.trim() || "llama-3.3-70b-versatile",
+      provider: chatProvider, geminiKey: "", groqKey: "",
+      geminiModel: geminiModel.trim() || "gemini-2.5-flash",
+      groqModel: groqModel.trim() || "llama-3.3-70b-versatile",
     });
-    setChatSaved(true); setTimeout(() => setChatSaved(false), 2000);
+    setGeminiKey(""); setGroqKey("");
+    setChatSaved(true); setTimeout(() => setChatSaved(false), 2500);
   }
 
   useEffect(() => {
@@ -218,13 +234,13 @@ export default function SettingsPage() {
 
           {chatProvider === "gemini" && (
             <ProviderKeyModel
-              label="Gemini" keyValue={geminiKey} onKey={setGeminiKey} model={geminiModel} onModel={setGeminiModel}
+              label="Gemini" keyValue={geminiKey} onKey={setGeminiKey} model={geminiModel} onModel={setGeminiModel} serverSet={serverKeys.gemini}
               models={geminiModels} loading={loadingModels === "gemini"} onLoad={() => loadModels("gemini", geminiKey)}
               placeholder="AIza…" getKeyUrl="https://aistudio.google.com/apikey" showKey={showKey} setShowKey={setShowKey} />
           )}
           {chatProvider === "groq" && (
             <ProviderKeyModel
-              label="Groq" keyValue={groqKey} onKey={setGroqKey} model={groqModel} onModel={setGroqModel}
+              label="Groq" keyValue={groqKey} onKey={setGroqKey} model={groqModel} onModel={setGroqModel} serverSet={serverKeys.groq}
               models={groqModels} loading={loadingModels === "groq"} onLoad={() => loadModels("groq", groqKey)}
               placeholder="gsk_…" getKeyUrl="https://console.groq.com/keys" showKey={showKey} setShowKey={setShowKey} />
           )}
@@ -239,8 +255,7 @@ export default function SettingsPage() {
             )}
           </div>
           <p className="text-[11px] leading-relaxed text-slate-500">
-            🔒 Keys entered here are stored <b>only in this browser</b> and sent <b>only to your own server</b> (never directly to Google/Groq from the browser, never in the app bundle).
-            Want keys to <b>never touch the browser</b>? Put <code className="text-slate-400">GEMINI_API_KEY</code> / <code className="text-slate-400">GROQ_API_KEY</code> in <code className="text-slate-400">.env.local</code> and leave these blank — the models still load.
+            🔒 Keys you enter here are saved on the <b>server</b> (written to <code className="text-slate-400">.env.local</code>), <b>never stored in the browser</b> and never committed to git. Only the (non‑secret) provider &amp; model choice stays in this browser.
           </p>
         </div>
       </Panel>
@@ -270,18 +285,21 @@ function Field({ label, icon: Icon, children }: { label: string; icon: any; chil
   );
 }
 
-function ProviderKeyModel({ label, keyValue, onKey, model, onModel, models, loading, onLoad, placeholder, getKeyUrl, showKey, setShowKey }: {
+function ProviderKeyModel({ label, keyValue, onKey, model, onModel, models, loading, onLoad, placeholder, getKeyUrl, showKey, setShowKey, serverSet }: {
   label: string; keyValue: string; onKey: (v: string) => void; model: string; onModel: (v: string) => void;
-  models: string[]; loading: boolean; onLoad: () => void; placeholder: string; getKeyUrl: string; showKey: boolean; setShowKey: (v: boolean) => void;
+  models: string[]; loading: boolean; onLoad: () => void; placeholder: string; getKeyUrl: string; showKey: boolean; setShowKey: (v: boolean) => void; serverSet: boolean;
 }) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <Field label={`${label} API key`} icon={KeyRound}>
         <div className="relative">
-          <input type={showKey ? "text" : "password"} value={keyValue} onChange={(e) => onKey(e.target.value)} onBlur={onLoad} placeholder={placeholder} className={cn(inputCls, "pr-10 font-mono")} />
+          <input type={showKey ? "text" : "password"} value={keyValue} onChange={(e) => onKey(e.target.value)} onBlur={onLoad} placeholder={serverSet ? "•••••••• saved on server — leave blank to keep" : placeholder} className={cn(inputCls, "pr-10 font-mono")} />
           <button onClick={() => setShowKey(!showKey)} type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
         </div>
-        <a href={getKeyUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-[11px] text-teal-300 hover:underline">Get a free key →</a>
+        <div className="mt-1 flex items-center gap-2">
+          {serverSet && <span className="inline-flex items-center gap-1 text-[11px] text-teal-300"><Check className="h-3 w-3" /> Saved on server</span>}
+          <a href={getKeyUrl} target="_blank" rel="noreferrer" className="text-[11px] text-slate-400 hover:text-teal-300 hover:underline">Get a free key →</a>
+        </div>
       </Field>
       <Field label={`${label} model`} icon={Sparkles}>
         <div className="flex gap-2">
