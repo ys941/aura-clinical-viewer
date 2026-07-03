@@ -79,10 +79,12 @@ export function ChatBot() {
   const [staged, setStaged] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [drag, setDrag] = useState(false);
+  const [agentReady, setAgentReady] = useState(false); // a Gemini/Groq key exists server-side → config-by-chat works
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages, loading, open]);
+  useEffect(() => { fetch("/api/settings-keys").then((r) => r.json()).then((d) => setAgentReady(!!d?.gemini || !!d?.groq)).catch(() => {}); }, [open]);
 
   async function addFiles(list: FileList | File[]) {
     const files = Array.from(list).filter((f) => f.type.startsWith("image/")).slice(0, 4);
@@ -143,8 +145,10 @@ export function ChatBot() {
     }
 
     const s0 = getChatSettings();
-    // "Configure by chat": profile / letterhead / model / viewer from natural language (Gemini or Groq).
-    if (!imgs.length && text && (s0.provider === "gemini" || s0.provider === "groq") && SETTINGS_HINT.test(text)) {
+    // "Configure by chat": profile / letterhead / model / viewer from natural language.
+    // Works whenever a capable key exists (server env or browser) — even while chatting with MedGemma.
+    const canConfig = agentReady || !!(s0.geminiKey || s0.groqKey) || s0.provider === "gemini" || s0.provider === "groq";
+    if (!imgs.length && text && canConfig && SETTINGS_HINT.test(text)) {
       setLoading(true);
       try {
         const res = await fetch("/api/assistant-action", { method: "POST", headers: { "Content-Type": "application/json" },

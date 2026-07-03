@@ -28,24 +28,28 @@ If it is NOT a settings/viewer request, use "action":"answer" and put a normal, 
 
 const ROLES = ["Radiologist", "Cardiologist", "Ophthalmologist", "Pathologist", "Clinician", "Resident", "Technologist", "Administrator"];
 
-async function agentJson(provider: string, message: string, body: any): Promise<{ text?: string; error?: string }> {
-  if (provider === "groq") {
-    const key = (String(body?.groqKey || "") || process.env.GROQ_API_KEY || "").trim();
+async function agentJson(message: string, body: any): Promise<{ text?: string; error?: string }> {
+  const reqProvider = String(body?.provider || "").toLowerCase();
+  const geminiKey = (String(body?.geminiKey || "") || process.env.GEMINI_API_KEY || "").trim();
+  const groqKey = (String(body?.groqKey || "") || process.env.GROQ_API_KEY || "").trim();
+  // Use the selected provider if it has a key, otherwise whichever capable key exists.
+  const use = (reqProvider === "gemini" && geminiKey) ? "gemini"
+    : (reqProvider === "groq" && groqKey) ? "groq"
+    : geminiKey ? "gemini" : groqKey ? "groq" : "";
+  if (!use) return { error: "no-key" };
+
+  if (use === "groq") {
     const model = (String(body?.groqModel || "") || process.env.GROQ_MODEL || "llama-3.3-70b-versatile").trim();
-    if (!key) return { error: "no-key" };
     const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(30000),
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${groqKey}` }, signal: AbortSignal.timeout(30000),
       body: JSON.stringify({ model, temperature: 0.1, response_format: { type: "json_object" }, messages: [{ role: "system", content: AGENT }, { role: "user", content: message }] }),
     });
     if (!r.ok) return { error: `Groq ${r.status}: ${(await r.text().catch(() => "")).slice(0, 120)}` };
     const d = await r.json();
     return { text: d?.choices?.[0]?.message?.content || "" };
   }
-  // gemini
-  const key = (String(body?.geminiKey || "") || process.env.GEMINI_API_KEY || "").trim();
   const model = (String(body?.geminiModel || "") || process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
-  if (!key) return { error: "no-key" };
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${key}`, {
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${geminiKey}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
     body: JSON.stringify({ systemInstruction: { parts: [{ text: AGENT }] }, contents: [{ role: "user", parts: [{ text: message }] }], generationConfig: { temperature: 0.1, responseMimeType: "application/json" } }),
   });
@@ -58,12 +62,11 @@ export async function POST(req: Request) {
   let body: any = {};
   try { body = await req.json(); } catch {}
   const message = String(body?.message || "").slice(0, 2000);
-  const provider = String(body?.provider || "gemini").toLowerCase();
   if (!message) return NextResponse.json({ action: "answer", reply: "How can I help?" });
 
   try {
-    const out = await agentJson(provider, message, body);
-    if (out.error === "no-key") return NextResponse.json({ action: "answer", reply: `Add a ${provider === "groq" ? "Groq" : "Gemini"} API key in Settings → AI Assistant so I can change settings for you by chat.` });
+    const out = await agentJson(message, body);
+    if (out.error === "no-key") return NextResponse.json({ action: "answer", noKey: true, reply: "To control the app by chat, add a Gemini or Groq key in Settings → AI Assistant." });
     if (out.error) return NextResponse.json({ action: "answer", reply: out.error });
     const text = (out.text || "").trim();
     let parsed: any = {};
