@@ -3,8 +3,33 @@
 import { useEffect, useRef, useState } from "react";
 import { X, Send, ImagePlus, Loader2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { getChatSettings, setChatSettings } from "@/lib/chatSettings";
 
 type Msg = { role: "user" | "assistant"; text: string; images?: string[] };
+
+// Change assistant settings by chatting (text-only). Returns a reply, or null to fall through to the model.
+function handleSettingsCommand(text: string): string | null {
+  const t = text.toLowerCase().trim();
+  const keyMatch = text.match(/AIza[\w-]{20,}/);
+  if (keyMatch && /(gemini|api\s*key|\bkey\b)/i.test(t)) {
+    setChatSettings({ geminiKey: keyMatch[0], provider: "gemini" });
+    return "Saved your Gemini API key and switched me to Gemini. ✅ Ask me anything now.";
+  }
+  if (/\b(use|switch to|change to|set|talk in)\b.*\bgemini\b/.test(t) || t === "gemini") {
+    const s = setChatSettings({ provider: "gemini" });
+    return s.geminiKey ? "Switched to Gemini. ✅" : "Switched to Gemini — I still need a key. Paste it like “my gemini key is AIza…”, or add it in Settings → AI Assistant.";
+  }
+  if (/\b(use|switch to|change to|set)\b.*\b(medgemma|med gemma|colab)\b/.test(t) || t === "medgemma") {
+    setChatSettings({ provider: "medgemma" });
+    return "Switched to MedGemma (via Colab). ✅ Best when you attach a medical image.";
+  }
+  if ((/\b(what|which)\b.*\bmodel\b/.test(t) && /\b(you|using|now|current)\b/.test(t)) || /current model/.test(t)) {
+    const s = getChatSettings();
+    return `I'm currently using ${s.provider === "gemini" ? `Gemini (${s.geminiModel})` : "MedGemma (via Colab)"}. Say “use gemini” or “use medgemma” to switch.`;
+  }
+  if (/\b(open|go to|show)\b.*\bsettings\b/.test(t)) { try { window.location.href = "/settings"; } catch {} return "Opening Settings…"; }
+  return null;
+}
 
 // A Siri-like animated orb: layered rotating conic gradients + a pulsing core.
 function SiriOrb() {
@@ -58,13 +83,26 @@ export function ChatBot() {
   async function send() {
     const text = input.trim();
     if ((!text && !staged.length) || loading) return;
-    const userMsg: Msg = { role: "user", text: text || "What can you tell me about this image?", images: staged };
+    const imgs = staged;
+    const userMsg: Msg = { role: "user", text: text || "What can you tell me about this image?", images: imgs };
     const history = [...messages, userMsg];
-    setMessages(history); setInput(""); setStaged([]); setLoading(true);
+    setMessages(history); setInput(""); setStaged([]);
+
+    // Text-only settings commands are handled locally (switch model, set key, etc.).
+    if (!imgs.length && text) {
+      const cmd = handleSettingsCommand(text);
+      if (cmd) { setMessages((m) => [...m, { role: "assistant", text: cmd }]); return; }
+    }
+
+    setLoading(true);
     try {
+      const s = getChatSettings();
       const res = await fetch("/api/chat", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history.map((m) => ({ role: m.role, content: m.text, images: m.images || [] })) }),
+        body: JSON.stringify({
+          messages: history.map((m) => ({ role: m.role, content: m.text, images: m.images || [] })),
+          provider: s.provider, geminiKey: s.geminiKey, geminiModel: s.geminiModel,
+        }),
       });
       const data = await res.json();
       setMessages((m) => [...m, { role: "assistant", text: data?.reply || "Sorry, I couldn't get a response." }]);

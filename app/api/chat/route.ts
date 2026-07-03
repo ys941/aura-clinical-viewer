@@ -55,9 +55,12 @@ export async function POST(req: Request) {
   if (last && !(last.images && last.images.length) && isIdentityAsk(last.content)) {
     return NextResponse.json({ reply: IDENTITY_REPLY });
   }
-  const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase();
+  // Per-request model choice from the user's Settings (falls back to server env).
+  const provider = String(body?.provider || process.env.AI_PROVIDER || "gemini").toLowerCase();
+  const geminiKey = typeof body?.geminiKey === "string" ? body.geminiKey.trim() : "";
+  const geminiModel = typeof body?.geminiModel === "string" ? body.geminiModel.trim() : "";
   try {
-    return provider === "gemini" ? await gemini(msgs) : await openai(msgs);
+    return provider === "gemini" ? await gemini(msgs, geminiKey, geminiModel) : await openai(msgs);
   } catch (e: any) {
     const raw = String(e?.message || e);
     const reply = /fetch failed|ECONNREFUSED|ENOTFOUND|terminated|network/i.test(raw)
@@ -105,10 +108,10 @@ async function openai(msgs: Msg[]) {
   } finally { clearTimeout(timer); }
 }
 
-async function gemini(msgs: Msg[]) {
-  const key = process.env.GEMINI_API_KEY?.trim();
-  const model = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
-  if (!key) return NextResponse.json({ reply: "No Gemini API key set. Add GEMINI_API_KEY in .env.local (AI_PROVIDER=gemini), or use MedGemma via Colab." });
+async function gemini(msgs: Msg[], keyOverride = "", modelOverride = "") {
+  const key = keyOverride || process.env.GEMINI_API_KEY?.trim() || "";
+  const model = modelOverride || process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+  if (!key) return NextResponse.json({ reply: "No Gemini API key set. Add it in Settings → AI Assistant (or say “my gemini key is AIza…”). Get a free key at aistudio.google.com/apikey." });
   const capped = capImages(msgs.slice(-8), 3);
   const contents = capped.map((m) => {
     const parts: any[] = [];

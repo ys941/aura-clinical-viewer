@@ -5,7 +5,8 @@ import { useUser, UserProfile } from "@clerk/nextjs";
 import { PageHeader } from "@/components/PageHeader";
 import { Panel, SectionTitle } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { User, Camera, Check, Loader2, IdCard, Building2, UserCog } from "lucide-react";
+import { getChatSettings, setChatSettings, type ChatProvider } from "@/lib/chatSettings";
+import { User, Camera, Check, Loader2, IdCard, Building2, UserCog, Sparkles, KeyRound, Eye, EyeOff } from "lucide-react";
 
 const ROLES = [
   "Radiologist",
@@ -30,6 +31,22 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Aura Assistant (chatbot) model settings — stored locally in the browser.
+  const [chatProvider, setChatProvider] = useState<ChatProvider>("medgemma");
+  const [geminiKey, setGeminiKey] = useState("");
+  const [geminiModel, setGeminiModel] = useState("gemini-2.5-flash");
+  const [showKey, setShowKey] = useState(false);
+  const [chatSaved, setChatSaved] = useState(false);
+
+  useEffect(() => {
+    const s = getChatSettings();
+    setChatProvider(s.provider); setGeminiKey(s.geminiKey); setGeminiModel(s.geminiModel);
+  }, []);
+  function saveChat() {
+    setChatSettings({ provider: chatProvider, geminiKey: geminiKey.trim(), geminiModel: geminiModel.trim() || "gemini-2.5-flash" });
+    setChatSaved(true); setTimeout(() => setChatSaved(false), 2000);
+  }
 
   useEffect(() => {
     if (!user) return;
@@ -148,6 +165,46 @@ export default function SettingsPage() {
             {saved ? "Saved" : saving ? "Saving…" : "Save changes"}
           </button>
           <span className="text-xs text-slate-500">Stored securely with your account — no separate database.</span>
+        </div>
+      </Panel>
+
+      {/* Aura Assistant (chatbot) model */}
+      <Panel className="mb-5">
+        <SectionTitle title="AI Assistant" subtitle="Choose the chatbot model — and set your Gemini key" icon={Sparkles} />
+        <div className="space-y-4">
+          <div>
+            <span className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-slate-400"><Sparkles className="h-3.5 w-3.5" /> Chat model</span>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {([
+                { id: "medgemma", name: "MedGemma (Colab)", desc: "Free medical vision model. Best for reading images." },
+                { id: "gemini", name: "Gemini", desc: "Great for text chat & every language. Needs a free key." },
+              ] as const).map((o) => (
+                <button key={o.id} onClick={() => setChatProvider(o.id)}
+                  className={cn("rounded-xl border p-3 text-left transition", chatProvider === o.id ? "border-teal-500/50 bg-teal-500/10" : "border-white/10 bg-navy-850 hover:bg-white/5")}>
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white">{o.name}{chatProvider === o.id && <Check className="h-4 w-4 text-teal-300" />}</div>
+                  <div className="mt-0.5 text-[11px] text-slate-400">{o.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+          {chatProvider === "gemini" && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="Gemini API key" icon={KeyRound}>
+                <div className="relative">
+                  <input type={showKey ? "text" : "password"} value={geminiKey} onChange={(e) => setGeminiKey(e.target.value)} placeholder="AIza…" className={cn(inputCls, "pr-10 font-mono")} />
+                  <button onClick={() => setShowKey((v) => !v)} type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
+                </div>
+                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="mt-1 inline-block text-[11px] text-teal-300 hover:underline">Get a free key →</a>
+              </Field>
+              <Field label="Gemini model" icon={Sparkles}>
+                <input value={geminiModel} onChange={(e) => setGeminiModel(e.target.value)} placeholder="gemini-2.5-flash" className={inputCls} />
+              </Field>
+            </div>
+          )}
+          <div className="flex items-center gap-3">
+            <button onClick={saveChat} className="btn-primary">{chatSaved ? <Check className="h-4 w-4" /> : null}{chatSaved ? "Saved" : "Save assistant settings"}</button>
+            <span className="text-xs text-slate-500">Stored only in this browser. You can also change this by chatting: “use gemini”, “my key is AIza…”.</span>
+          </div>
         </div>
       </Panel>
 
