@@ -85,13 +85,48 @@ Scroll to any slice and hit **Pin** (or press **`P`**) — across **any films/se
 No generic questions up front. It **reads first**, then asks the **clinical questions its findings actually raised** (smoking history? prior malignancy? symptom duration?) — fully skippable. Your answers trigger a **full‑resolution re‑analysis of the key slices** → a sharper final report.
 
 ### 💬 Aura Assistant — the floating Siri orb
-A glowing animated orb bottom‑right. **Drop, paste, or upload** any medical image and **chat** about it in **any language** (it mirrors yours). Multi‑turn, image‑aware, powered by the same MedGemma.
+A glowing animated orb bottom‑right. **Drop, paste, or upload** any medical image and **chat** about it in **any language** (it mirrors yours). Multi‑turn, image‑aware. Pick its brain in **Settings → AI Assistant**: **MedGemma**, **Gemini**, or **Groq** (model lists are pulled live from each provider; keys stay in your browser). And it can **drive the app for you** — see below.
 
 ### 📋 A report that looks like a real radiology report
 After analysis the **editable report opens itself** — a formal **letterhead layout** (your centre + reporting doctor, remembered on your device), patient table, exam title, **Clinical History → Findings → Impression → Advice → Key Images gallery**, signature block, and "electronically verified." Export a styled standalone **`report.html`** with a built‑in **🖨 Print / Save PDF** button. Format follows the **ACR / RSNA** structured‑reporting standard.
 
 ### 🔐 Auth + settings, no cap
 **Clerk** handles login — email/password **and Google SSO** + password reset. Settings let you change your photo, name, role, org (stored on your account, not some database).
+
+---
+
+## 🧠 The two AIs (and what each one does)
+
+Aura has **two separate AI brains** — don't mix them up:
+
+### 1) The Imaging AI — *reads pictures, writes reports*
+This is the **AI** button in the viewer. It looks at the pixels and produces a radiology report. **It does not control the app** — it only reads and writes findings.
+
+- **Providers:** MedGemma 1.5 (free, on Colab) · Gemini / Gemma.
+- **What it does:** reads the **whole study** or your **pinned slices** → **Findings** (by anatomical structure) · **Impression** · **Recommendations** · **Key Images**; asks the **clinical questions** its findings raise, then **re‑reads at full resolution** for a sharper report; renders the editable, printable report.
+- **Input smarts:** 2D (CXR/derm/etc.) at full **896**, **CT with 3‑window RGB**, MR/volumetric every slice by view.
+
+### 2) The Aura Assistant — *chats, and drives the whole app*
+This is the **floating orb**. It talks to you about images **and** can **operate the app on your command** (natural language, any language). Choose its model in **Settings → AI Assistant**.
+
+| Provider | Chat | Reads images | **Controls the app** |
+|---|---|---|---|
+| **MedGemma** | weak (it's a vision model) | ✅ best for medical images | ❌ |
+| **Gemini** | ✅ excellent, multilingual | ✅ | ✅ |
+| **Groq** (Llama) | ✅ excellent, very fast | ✅ *(vision models only)* | ✅ |
+
+**What the Assistant can control** (on Gemini or Groq) — just say it in plain language:
+
+- **Profile:** name · role · organization → *"set my role to Radiologist"*
+- **Report letterhead:** centre name · address · doctor name · qualifications → *"reporting doctor Dr. A. Sharma, MD, Reg 12345"*
+- **Its own model/keys:** *"use gemini"* · *"use groq"* · *"my key is …"* · *"switch to gemini‑2.5‑pro"*
+- **The viewer:**
+  - **Window/level:** *"apply lung window"* · *bone · brain · soft tissue · CT angio*
+  - **Navigation:** *"next slice"* · *previous · first · last*
+  - **Display:** *"invert"* · *"turn off overlays"* · *"go fullscreen"* · *"reset the view"* · *"wheel to zoom / scroll"*
+  - **Actions:** *"analyze the whole study"* · *"analyze pinned images"* · *"open the report"*
+
+> ⚠️ Config‑by‑chat needs **Gemini or Groq** (MedGemma can't do reliable command extraction). Viewer commands only act when a study is open. Everything is whitelisted server‑side; keys never leave your browser.
 
 ---
 
