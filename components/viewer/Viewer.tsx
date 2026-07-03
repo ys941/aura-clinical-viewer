@@ -503,6 +503,9 @@ export default function Viewer() {
         case "pin": { if (val === "clear") setAiPicks([]); else togglePick(); break; }
         case "analyze": { if (val === "pinned") runAiSelected(); else runAi(); break; }
         case "report": openReport(); break;
+        case "report_edit": editReport(String(a.section || "findings"), String(a.text || ""), String(a.mode || "replace")); break;
+        case "report_download": downloadReportNow(); break;
+        case "report_print": printReportNow(); break;
         case "upload": { stopCine(); setStudy(null); break; }
       }
     };
@@ -911,6 +914,25 @@ export default function Viewer() {
 
   function openReport(findings = "") { setReportFindings(findings); setReportImpression(""); setReportTechnique(""); setReportRecs(""); setReportHistory(""); setKeyImages([]); const canvas = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null; setSnapshot(canvas ? canvas.toDataURL("image/png") : ""); setShowReport(true); }
 
+  // Build the report from the current viewer state (letterhead from saved prefs) — for chat download/print.
+  function currentReportOpts(): ReportOpts {
+    const p = loadPrefs();
+    return { history: reportHistory, technique: reportTechnique, findings: reportFindings, impression: reportImpression, recommendations: reportRecs, snapshot, keyImages, measurements, aiConnected: ai.connected, clinicName: p.clinicName, clinicAddress: p.clinicAddress, doctorName: p.doctorName, doctorCreds: p.doctorCreds };
+  }
+  function downloadReportNow() { if (!study) return; dlHtml(buildReportHtml(study, currentReportOpts()), `report-${study.name.replace(/\W+/g, "_")}.html`); toast("Report downloaded"); }
+  function printReportNow() { if (!study) return; printHtml(buildReportHtml(study, currentReportOpts())); }
+  // Edit a report section from chat (replace or append), then show the report.
+  function editReport(section: string, text: string, mode: string) {
+    const s = section.toLowerCase(), ap = mode === "append";
+    const set = (fn: (u: (p: string) => string) => void) => fn((prev) => (ap && prev ? prev + "\n" + text : text));
+    if (/impress|diagnos|conclus|opinion/.test(s)) set(setReportImpression);
+    else if (/recommend|advice|advis/.test(s)) set(setReportRecs);
+    else if (/techni|protocol/.test(s)) set(setReportTechnique);
+    else if (/hist|indicat|clinical/.test(s)) set(setReportHistory);
+    else set(setReportFindings);
+    setShowReport(true);
+  }
+
   // ───────── empty state ─────────
   if (study === null) {
     return (
@@ -1131,7 +1153,7 @@ export default function Viewer() {
           onReport={() => { setShowAiResult(false); openReport(ai.text || ""); }} />
       )}</AnimatePresence>
       <AnimatePresence>{showQuestions && study && <QuestionsModal questions={aiQuestions} onSubmit={(a) => finishAnalysis(a)} onSkip={() => finishAnalysis("")} />}</AnimatePresence>
-      <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} initialFindings={reportFindings} initialImpression={reportImpression} initialTechnique={reportTechnique} initialRecs={reportRecs} initialHistory={reportHistory} keyImages={keyImages} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
+      <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} findings={reportFindings} onFindings={setReportFindings} impression={reportImpression} onImpression={setReportImpression} technique={reportTechnique} onTechnique={setReportTechnique} recommendations={reportRecs} onRecommendations={setReportRecs} history={reportHistory} onHistory={setReportHistory} keyImages={keyImages} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
       <AnimatePresence>{showExport && activeSeries && <ExportModal seriesName={activeSeries.name} total={total} current={index + 1} fps={fps} onClose={() => setShowExport(false)} onExport={exportRun} />}</AnimatePresence>
     </div>
   );
@@ -1372,7 +1394,7 @@ function QuestionsModal({ questions, onSubmit, onSkip }: { questions: string[]; 
 const PREFS_KEY = "aura-report-prefs";
 function loadPrefs(): Record<string, string> { try { return JSON.parse(localStorage.getItem(PREFS_KEY) || "{}"); } catch { return {}; } }
 
-function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", initialImpression = "", initialTechnique = "", initialRecs = "", initialHistory = "", keyImages = [], onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; initialFindings?: string; initialImpression?: string; initialTechnique?: string; initialRecs?: string; initialHistory?: string; keyImages?: KeyImage[]; onClose: () => void; onSaved: () => void }) {
+function ReportModal({ study, ai, snapshot, measurements, findings, onFindings, impression, onImpression, technique, onTechnique, recommendations, onRecommendations, history, onHistory, keyImages = [], onClose, onSaved }: { study: LoadedStudy; ai: AiState; snapshot: string; measurements: { tool: string; text: string }[]; findings: string; onFindings: (v: string) => void; impression: string; onImpression: (v: string) => void; technique: string; onTechnique: (v: string) => void; recommendations: string; onRecommendations: (v: string) => void; history: string; onHistory: (v: string) => void; keyImages?: KeyImage[]; onClose: () => void; onSaved: () => void }) {
   const d = study.dict;
   // all details, auto-filled from DICOM, fully editable
   const [f, setF] = useState<Record<string, string>>({
@@ -1383,12 +1405,9 @@ function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", 
     "Accession #": d["Accession #"] || "",
   });
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
-  const [history, setHistory] = useState(initialHistory);
-  const [technique, setTechnique] = useState(initialTechnique || "");
+  // findings / impression / technique / recommendations / history are CONTROLLED by the viewer
+  // (single source of truth) so chat edits and manual edits stay in sync. Comparison is local.
   const [comparison, setComparison] = useState("");
-  const [findings, setFindings] = useState(initialFindings);
-  const [impression, setImpression] = useState(initialImpression);
-  const [recommendations, setRecommendations] = useState(initialRecs);
   // letterhead + signature — remembered across sessions (localStorage, this device only)
   const [prefs] = useState(loadPrefs);
   const [clinicName, setClinicName] = useState(prefs.clinicName || "");
@@ -1429,7 +1448,7 @@ function ReportModal({ study, ai, snapshot, measurements, initialFindings = "", 
               ))}
             </div>
           </div>
-          {[{ label: "Clinical history", v: history, set: setHistory, r: 2 }, { label: "Technique", v: technique, set: setTechnique, r: 2 }, { label: "Comparison", v: comparison, set: setComparison, r: 1 }, { label: "Findings", v: findings, set: setFindings, r: 6 }, { label: "Impression", v: impression, set: setImpression, r: 3 }, { label: "Advice / Recommendations", v: recommendations, set: setRecommendations, r: 2 }].map((s) => (<L key={s.label} label={s.label}><textarea value={s.v} onChange={(e) => s.set(e.target.value)} rows={s.r} className={rin} /></L>))}
+          {[{ label: "Clinical history", v: history, set: onHistory, r: 2 }, { label: "Technique", v: technique, set: onTechnique, r: 2 }, { label: "Comparison", v: comparison, set: setComparison, r: 1 }, { label: "Findings", v: findings, set: onFindings, r: 6 }, { label: "Impression", v: impression, set: onImpression, r: 3 }, { label: "Advice / Recommendations", v: recommendations, set: onRecommendations, r: 2 }].map((s) => (<L key={s.label} label={s.label}><textarea value={s.v} onChange={(e) => s.set(e.target.value)} rows={s.r} className={rin} /></L>))}
           <div>
             <label className="label-tiny">Letterhead &amp; reporting doctor <span className="text-slate-500">(remembered on this device)</span></label>
             <div className="mt-1 grid grid-cols-2 gap-2">

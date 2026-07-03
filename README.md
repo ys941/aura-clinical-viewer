@@ -129,7 +129,9 @@ This is the **floating orb**. It talks to you about images **and** can **operate
   - **Series:** *"next series"* · *"previous series"* · *"series 3"*
   - **Cine:** *"play"* · *"pause"* · *"set fps to 20"*
   - **Panels/display:** *"hide the series panel"* · *"show DICOM tags"* · *"overlays off"* · *"fullscreen"* · *"reset the view"* · *"wheel to zoom / scroll"*
-  - **Pins & AI:** *"pin this slice"* · *"clear pins"* · *"analyze the whole study"* · *"analyze pinned images"* · *"copy the image"* · *"clear annotations"* · *"open the report"*
+  - **Pins & AI:** *"pin this slice"* · *"clear pins"* · *"analyze the whole study"* · *"analyze pinned images"* · *"copy the image"* · *"clear annotations"* · *"upload a new study"*
+  - **The report:** *"open the report"* · *"add to findings: mild cardiomegaly"* · *"replace impression with …"* · *"download the report"* · *"print the report"*
+  - **See the screen:** *"what is this?"* / the 🖥️ button grabs the slice you're viewing and reads it
 
 > ⚠️ Config‑by‑chat needs a **Gemini or Groq** key (MedGemma can't do reliable command extraction) — it works even while you chat with MedGemma for images. Viewer commands only act when a study is open. Everything is whitelisted server‑side.
 

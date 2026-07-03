@@ -35,8 +35,13 @@ Viewer controls (the image viewer). Use action "viewer" with params {"command": 
 - "report"        (open the report)
 - "upload"        (open the file picker to load a new study)
 
+Report actions (the generated radiology report):
+- action "report_edit", params {"section": findings|impression|recommendations|technique|history, "text": "<the exact text>", "mode": replace|append}
+- action "report_download"   (download the report as HTML)
+- action "report_print"      (print / save the report as PDF)
+
 Respond with JSON ONLY, matching:
-{"action":"set_profile"|"set_letterhead"|"set_chat_model"|"viewer"|"answer","params":{ ...only the fields/command to change... },"reply":"<one short sentence confirming what you did, or your normal answer — in the SAME language the user wrote in>"}
+{"action":"set_profile"|"set_letterhead"|"set_chat_model"|"viewer"|"report_edit"|"report_download"|"report_print"|"answer","params":{ ...only the fields/command to change... },"reply":"<one short sentence confirming what you did, or your normal answer — in the SAME language the user wrote in>"}
 
 If it is NOT a settings/viewer request, use "action":"answer" and put a normal, helpful reply in "reply". Never invent values the user didn't give.`;
 
@@ -86,7 +91,7 @@ export async function POST(req: Request) {
     let parsed: any = {};
     try { parsed = JSON.parse(text); } catch { return NextResponse.json({ action: "answer", reply: text || "Okay." }); }
 
-    const action = ["set_profile", "set_letterhead", "set_chat_model", "viewer", "answer"].includes(parsed?.action) ? parsed.action : "answer";
+    const action = ["set_profile", "set_letterhead", "set_chat_model", "viewer", "report_edit", "report_download", "report_print", "answer"].includes(parsed?.action) ? parsed.action : "answer";
     const p = parsed?.params && typeof parsed.params === "object" ? parsed.params : {};
     // whitelist + sanitize params per action
     const params: any = {};
@@ -107,9 +112,16 @@ export async function POST(req: Request) {
         if (typeof p.show === "string") params.show = p.show.trim().toLowerCase().slice(0, 10);
         for (const k of ["ww", "wc", "percent", "n", "slice", "number"]) { const v = Number(p[k]); if (Number.isFinite(v)) params[k] = v; }
       }
+    } else if (action === "report_edit") {
+      const sec = String(p.section || "").toLowerCase();
+      params.section = /impress|diagnos|conclus|opinion/.test(sec) ? "impression" : /recommend|advice|advis/.test(sec) ? "recommendations" : /techni|protocol/.test(sec) ? "technique" : /hist|indicat|clinical/.test(sec) ? "history" : "findings";
+      params.text = String(p.text || "").slice(0, 3000);
+      params.mode = p.mode === "append" ? "append" : "replace";
     }
     const reply = typeof parsed?.reply === "string" && parsed.reply.trim() ? parsed.reply.trim() : "Done.";
-    return NextResponse.json({ action: Object.keys(params).length || action === "answer" ? action : "answer", params, reply });
+    const needsParams = ["set_profile", "set_letterhead", "set_chat_model", "viewer", "report_edit"].includes(action);
+    const finalAction = needsParams && !Object.keys(params).length ? "answer" : action;
+    return NextResponse.json({ action: finalAction, params, reply });
   } catch (e: any) {
     return NextResponse.json({ action: "answer", reply: e?.name === "TimeoutError" ? "Gemini took too long — try again." : "Couldn't reach Gemini. Check your key and try again." });
   }
