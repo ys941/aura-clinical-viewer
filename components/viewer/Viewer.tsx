@@ -7,6 +7,7 @@ import { loadStudy, readImageTags, type LoadedStudy, type LoadedSeries } from "@
 import { Dropzone } from "@/components/Dropzone";
 import { cn } from "@/lib/cn";
 import { BRAND } from "@/lib/brand";
+import { onAppCommand } from "@/lib/appCommands";
 import {
   Contrast, Move, ZoomIn, Search, Ruler, Triangle, Square, Circle, Crosshair,
   MessageSquare, PenTool, RotateCw, FlipHorizontal, FlipVertical, SunMedium,
@@ -468,6 +469,25 @@ export default function Viewer() {
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [study, showExport, showReport, showHelp, activeSeries, index, fullscreen, fps]);
+
+  // The chatbot can drive the viewer via app commands (window/level, wheel, navigation, analyze…).
+  const cmdRef = useRef<(c: { name: string; args?: any }) => void>(() => {});
+  useEffect(() => {
+    cmdRef.current = (c) => {
+      if (c.name !== "viewer" || !study) return;
+      const cmd = c.args?.command as string, val = (c.args?.value as string) || "";
+      if (cmd === "wheel") { const m = val === "zoom" ? "zoom" : "stack"; wheelModeRef.current = m; setWheelMode(m); applyWheel(m); }
+      else if (cmd === "window") { const map: Record<string, [number, number]> = { soft: [400, 40], angio: [600, 200], lung: [1500, -600], bone: [1800, 400], brain: [80, 40] }; const wl = map[val]; if (wl) applyWL(wl[0], wl[1]); }
+      else if (cmd === "overlays") setShowOverlays(val !== "off");
+      else if (cmd === "invert") invert();
+      else if (cmd === "fullscreen") toggleFullscreen();
+      else if (cmd === "reset") reset();
+      else if (cmd === "navigate") { if (val === "next") step(1); else if (val === "prev") step(-1); else if (val === "first") scrub(0); else if (val === "last") scrub((activeSeries?.imageIds.length || 1) - 1); }
+      else if (cmd === "analyze") { if (val === "pinned") runAiSelected(); else runAi(); }
+      else if (cmd === "report") openReport();
+    };
+  });
+  useEffect(() => onAppCommand((c) => cmdRef.current(c)), []);
 
   async function onFiles(files: File[]) {
     if (!apiRef.current) return;

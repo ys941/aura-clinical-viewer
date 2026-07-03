@@ -6,11 +6,12 @@ import { X, Send, ImagePlus, Loader2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { getChatSettings, setChatSettings } from "@/lib/chatSettings";
 import { setReportPrefs } from "@/lib/reportPrefs";
+import { dispatchAppCommand } from "@/lib/appCommands";
 
 type Msg = { role: "user" | "assistant"; text: string; images?: string[] };
 
-// Heuristic: does this text-only message look like a request to change an app setting?
-const SETTINGS_HINT = /\b(set|change|update|make|rename|call me|my name|i am|i'?m|name is|role|radiologist|cardiologist|pathologist|clinician|resident|technologist|organization|organisation|company|clinic|centre|center|hospital|doctor|dr\.?|letterhead|signature|qualification|registration|reg\.?\s*no|model|gemini|medgemma|profile)\b/i;
+// Heuristic: does this text-only message look like a request to change a setting or drive the viewer?
+const SETTINGS_HINT = /\b(set|change|update|make|rename|call me|my name|i am|i'?m|name is|role|radiologist|cardiologist|pathologist|clinician|resident|technologist|organization|organisation|company|clinic|centre|center|hospital|doctor|dr\.?|letterhead|signature|qualification|registration|reg\.?\s*no|model|gemini|medgemma|profile|window|level|preset|lung|bone|brain|soft tissue|angio|wheel|zoom|scroll|overlay|invert|full ?screen|reset|next|previous|prev|first|last|slice|analy[sz]e|report|open)\b/i;
 
 // Change assistant settings by chatting (text-only). Returns a reply, or null to fall through to the model.
 function handleSettingsCommand(text: string): string | null {
@@ -109,6 +110,8 @@ export function ChatBot() {
         if (p.provider) patch.provider = p.provider;
         if (p.geminiModel) patch.geminiModel = p.geminiModel;
         setChatSettings(patch);
+      } else if (action === "viewer" && p.command) {
+        dispatchAppCommand("viewer", { command: p.command, value: p.value });
       }
       return reply;
     } catch (e: any) {
