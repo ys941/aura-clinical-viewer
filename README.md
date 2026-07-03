@@ -120,13 +120,25 @@ This is the **floating orb**. It talks to you about images **and** can **operate
 - **Profile:** name · role · organization → *"set my role to Radiologist"*
 - **Report letterhead:** centre name · address · doctor name · qualifications → *"reporting doctor Dr. A. Sharma, MD, Reg 12345"*
 - **Its own model/keys:** *"use gemini"* · *"use groq"* · *"my key is …"* · *"switch to gemini‑2.5‑pro"*
-- **The viewer:**
-  - **Window/level:** *"apply lung window"* · *bone · brain · soft tissue · CT angio*
-  - **Navigation:** *"next slice"* · *previous · first · last*
-  - **Display:** *"invert"* · *"turn off overlays"* · *"go fullscreen"* · *"reset the view"* · *"wheel to zoom / scroll"*
-  - **Actions:** *"analyze the whole study"* · *"analyze pinned images"* · *"open the report"*
+- **The viewer — basically the whole toolbar by voice:**
+  - **Window/level:** *"apply lung window"* · *bone · brain · soft tissue · CT angio* · *"set window 1500 level -600"*
+  - **Tools:** *"pan"* · *"zoom tool"* · *"length"* · *"angle"* · *"rectangle ROI"* · *"ellipse"* · *"probe"* · *"annotate"* · *"freehand"* · *"magnify"*
+  - **Zoom/fit:** *"zoom in / out"* · *"fit"* · *"fill"* · *"actual size"* · *"zoom to 200%"*
+  - **Orientation:** *"rotate"* · *"flip horizontal / vertical"* · *"invert"*
+  - **Navigation:** *"next slice"* · *previous · first · last* · *"go to slice 42"*
+  - **Series:** *"next series"* · *"previous series"* · *"series 3"*
+  - **Cine:** *"play"* · *"pause"* · *"set fps to 20"*
+  - **Panels/display:** *"hide the series panel"* · *"show DICOM tags"* · *"overlays off"* · *"fullscreen"* · *"reset the view"* · *"wheel to zoom / scroll"*
+  - **Pins & AI:** *"pin this slice"* · *"clear pins"* · *"analyze the whole study"* · *"analyze pinned images"* · *"copy the image"* · *"clear annotations"* · *"open the report"*
 
-> ⚠️ Config‑by‑chat needs **Gemini or Groq** (MedGemma can't do reliable command extraction). Viewer commands only act when a study is open. Everything is whitelisted server‑side; keys never leave your browser.
+> ⚠️ Config‑by‑chat needs a **Gemini or Groq** key (MedGemma can't do reliable command extraction) — it works even while you chat with MedGemma for images. Viewer commands only act when a study is open. Everything is whitelisted server‑side.
+
+### 💸 Does chatting to control it burn rate limits?
+Yes — **each command you type is one small API call** to Gemini/Groq (a few hundred tokens: your sentence in, a tiny JSON action out). So:
+- **Reading images** (the report AI and "what's on this image") is the token‑heavy part.
+- **Config/viewer commands** are *tiny* text calls — cheap, but they **do** count against your provider's free‑tier rate limit (Gemini free ≈ 15 req/min, Groq is very generous). Fire 30 commands in a minute and you could brush the Gemini limit.
+- **Quick local commands** (*"use gemini"*, *"my key is …"*, *"open settings"*) make **zero** API calls — handled in‑browser.
+- Prefer **Groq** for chatty control if you're worried about limits (much higher free RPM), and **Gemini** for image reads.
 
 ---
 

@@ -10,16 +10,27 @@ Settings you can change:
 - letterhead (used on generated reports): clinicName, clinicAddress, doctorName, doctorCreds (qualifications / registration number)
 - chat_model: provider ("medgemma", "gemini", or "groq"), geminiModel, groqModel
 
-Viewer controls (the image viewer). For these use action "viewer" with params {"command": <one below>, "value": <see>}:
-- command "window", value one of: soft | angio | lung | bone | brain   (window/level presets)
-- command "wheel", value "zoom" | "scroll"   (mouse-wheel behaviour)
-- command "overlays", value "on" | "off"
-- command "invert"        (toggle black/white)
-- command "fullscreen"    (toggle)
-- command "reset"         (reset view)
-- command "navigate", value "next" | "prev" | "first" | "last"   (change slice)
-- command "analyze", value "study" | "pinned"   (run AI analysis)
-- command "report"        (open the report)
+Viewer controls (the image viewer). Use action "viewer" with params {"command": <one below>, and extra fields as noted}:
+- "window", value: soft | angio | lung | bone | brain   — OR custom: {"command":"window","ww":<number>,"wc":<number>}
+- "wheel", value: zoom | scroll
+- "tool", value: pan | zoom | magnify | length | angle | rectangle | ellipse | probe | annotate | freehand | windowlevel
+- "zoom", value: in | out | fit | fill | actual   — OR {"command":"zoom","percent":<number>}
+- "rotate"        (rotates 90°)
+- "flip", value: horizontal | vertical
+- "invert"        (toggle black/white)
+- "overlays", value: on | off
+- "panel", value: series | tags, and "show": on | off | toggle
+- "fullscreen"
+- "reset"         (reset view)
+- "clear"         (clear annotations/measurements)
+- "copy"          (copy current image)
+- "cine", value: play | pause | toggle
+- "fps", n: <number>
+- "navigate", value: next | prev | first | last   — OR {"command":"navigate","slice":<number>}
+- "series", value: next | prev   — OR {"command":"series","number":<number>}
+- "pin", value: add | clear   (pin the current slice for focused AI, or clear all pins)
+- "analyze", value: study | pinned
+- "report"        (open the report)
 
 Respond with JSON ONLY, matching:
 {"action":"set_profile"|"set_letterhead"|"set_chat_model"|"viewer"|"answer","params":{ ...only the fields/command to change... },"reply":"<one short sentence confirming what you did, or your normal answer — in the SAME language the user wrote in>"}
@@ -86,8 +97,13 @@ export async function POST(req: Request) {
       if (typeof p.geminiModel === "string" && p.geminiModel.trim()) params.geminiModel = p.geminiModel.trim().slice(0, 60);
       if (typeof p.groqModel === "string" && p.groqModel.trim()) params.groqModel = p.groqModel.trim().slice(0, 60);
     } else if (action === "viewer") {
-      const cmds = ["window", "wheel", "overlays", "invert", "fullscreen", "reset", "navigate", "analyze", "report"];
-      if (cmds.includes(p.command)) { params.command = p.command; if (typeof p.value === "string") params.value = p.value.trim().toLowerCase().slice(0, 20); }
+      const cmds = ["window", "wheel", "tool", "zoom", "rotate", "flip", "invert", "overlays", "panel", "fullscreen", "reset", "clear", "copy", "cine", "fps", "navigate", "series", "pin", "analyze", "report"];
+      if (cmds.includes(p.command)) {
+        params.command = p.command;
+        if (typeof p.value === "string") params.value = p.value.trim().toLowerCase().slice(0, 20);
+        if (typeof p.show === "string") params.show = p.show.trim().toLowerCase().slice(0, 10);
+        for (const k of ["ww", "wc", "percent", "n", "slice", "number"]) { const v = Number(p[k]); if (Number.isFinite(v)) params[k] = v; }
+      }
     }
     const reply = typeof parsed?.reply === "string" && parsed.reply.trim() ? parsed.reply.trim() : "Done.";
     return NextResponse.json({ action: Object.keys(params).length || action === "answer" ? action : "answer", params, reply });

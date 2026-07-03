@@ -470,21 +470,38 @@ export default function Viewer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [study, showExport, showReport, showHelp, activeSeries, index, fullscreen, fps]);
 
-  // The chatbot can drive the viewer via app commands (window/level, wheel, navigation, analyze…).
+  // The chatbot can drive the ENTIRE viewer via app commands (chat-to-control).
   const cmdRef = useRef<(c: { name: string; args?: any }) => void>(() => {});
   useEffect(() => {
     cmdRef.current = (c) => {
       if (c.name !== "viewer" || !study) return;
-      const cmd = c.args?.command as string, val = (c.args?.value as string) || "";
-      if (cmd === "wheel") { const m = val === "zoom" ? "zoom" : "stack"; wheelModeRef.current = m; setWheelMode(m); applyWheel(m); }
-      else if (cmd === "window") { const map: Record<string, [number, number]> = { soft: [400, 40], angio: [600, 200], lung: [1500, -600], bone: [1800, 400], brain: [80, 40] }; const wl = map[val]; if (wl) applyWL(wl[0], wl[1]); }
-      else if (cmd === "overlays") setShowOverlays(val !== "off");
-      else if (cmd === "invert") invert();
-      else if (cmd === "fullscreen") toggleFullscreen();
-      else if (cmd === "reset") reset();
-      else if (cmd === "navigate") { if (val === "next") step(1); else if (val === "prev") step(-1); else if (val === "first") scrub(0); else if (val === "last") scrub((activeSeries?.imageIds.length || 1) - 1); }
-      else if (cmd === "analyze") { if (val === "pinned") runAiSelected(); else runAi(); }
-      else if (cmd === "report") openReport();
+      const a = c.args || {}, cmd = a.command as string, val = String(a.value || "").toLowerCase();
+      const num = (k: string) => (Number.isFinite(+a[k]) ? +a[k] : NaN);
+      const len = activeSeries?.imageIds.length || 1;
+      const TOOLMAP: Record<string, string> = { pan: "Pan", zoom: "Zoom", magnify: "Magnify", length: "Length", angle: "Angle", rectangle: "RectangleRoi", ellipse: "EllipticalRoi", probe: "Probe", annotate: "ArrowAnnotate", freehand: "FreehandRoi", windowlevel: "Wwwc", "window/level": "Wwwc" };
+      const WL: Record<string, [number, number]> = { soft: [400, 40], angio: [600, 200], lung: [1500, -600], bone: [1800, 400], brain: [80, 40] };
+      switch (cmd) {
+        case "wheel": { const m = val === "zoom" ? "zoom" : "stack"; wheelModeRef.current = m; setWheelMode(m); applyWheel(m); break; }
+        case "window": { if (Number.isFinite(num("ww")) && Number.isFinite(num("wc"))) applyWL(num("ww"), num("wc")); else if (WL[val]) applyWL(WL[val][0], WL[val][1]); break; }
+        case "tool": { const t = TOOLMAP[val]; if (t) selectTool(t); break; }
+        case "zoom": { if (val === "in") zoomBy(1.25); else if (val === "out") zoomBy(0.8); else if (val === "fit") fit(); else if (val === "fill") fill(); else if (val === "actual" || val === "1:1") oneToOne(); else if (Number.isFinite(num("percent"))) setZoom(num("percent")); break; }
+        case "rotate": rotate(); break;
+        case "flip": { if (val.startsWith("v")) flipV(); else flipH(); break; }
+        case "invert": invert(); break;
+        case "overlays": setShowOverlays(val !== "off"); break;
+        case "panel": { const on = a.show === "off" ? false : a.show === "on" ? true : undefined; if (val === "tags") setShowRight((v) => (on === undefined ? !v : on)); else setShowLeft((v) => (on === undefined ? !v : on)); break; }
+        case "fullscreen": toggleFullscreen(); break;
+        case "reset": reset(); break;
+        case "clear": clearAnnotations(); break;
+        case "copy": copyImage(); break;
+        case "cine": { if (val === "play" && !playing) toggleCine(); else if (val === "pause" && playing) stopCine(); else toggleCine(); break; }
+        case "fps": { const n = num("n"); if (Number.isFinite(n)) setFps(Math.max(1, Math.min(60, Math.round(n)))); break; }
+        case "navigate": { if (Number.isFinite(num("slice"))) scrub(Math.max(0, Math.min(len - 1, Math.round(num("slice")) - 1))); else if (val === "next") step(1); else if (val === "prev") step(-1); else if (val === "first") scrub(0); else if (val === "last") scrub(len - 1); break; }
+        case "series": { const list = study.series; const cur = list.findIndex((s) => s.id === activeSeries?.id); let idx = cur; if (Number.isFinite(num("number"))) idx = Math.round(num("number")) - 1; else if (val === "next") idx = cur + 1; else if (val === "prev") idx = cur - 1; if (list[idx]) { stopCine(); setActiveSeriesId(list[idx].id); } break; }
+        case "pin": { if (val === "clear") setAiPicks([]); else togglePick(); break; }
+        case "analyze": { if (val === "pinned") runAiSelected(); else runAi(); break; }
+        case "report": openReport(); break;
+      }
     };
   });
   useEffect(() => onAppCommand((c) => cmdRef.current(c)), []);
