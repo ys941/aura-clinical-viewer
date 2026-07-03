@@ -107,7 +107,24 @@ const KEEP_SECTIONS: Record<string, string> = {
   recommendation: "recommendations", recommendations: "recommendations", advice: "recommendations",
   "key images": "key images", "key image": "key images", "key candidates": "key images",
 };
-const JUNK_SECTIONS = new Set(["discussion", "sample report", "teaching", "teaching point", "teaching points", "education", "educational", "notes", "note", "differential", "differential diagnosis", "comment", "comments", "reasoning", "thought", "thoughts", "analysis", "draft", "plan", "review", "explanation"]);
+const JUNK_SECTIONS = new Set(["discussion", "sample report", "teaching", "teaching point", "teaching points", "education", "educational", "notes", "note", "differential", "differential diagnosis", "comment", "comments", "reasoning", "thought", "thoughts", "analysis", "draft", "plan", "review", "explanation", "questions", "question"]);
+
+// Pull the "Questions" section the model asked for clarification.
+function parseQuestions(text: string): string[] {
+  const m = /(?:^|\n)[ \t]*#{0,4}[ \t]*\**[ \t]*questions?\b[ \t]*\**[ \t]*:?[ \t]*/i.exec(text);
+  if (!m) return [];
+  const scope = text.slice(m.index + m[0].length); // content after the heading line
+  const out: string[] = [];
+  for (const raw of scope.split(/\n/)) {
+    if (/^[ \t]*#{1,4}[ \t]/.test(raw) || /^[ \t]*\*\*[A-Z]/.test(raw)) break; // next heading
+    const l = raw.replace(/^[ \t]*[-*\d.)]+[ \t]*/, "").replace(/\*\*/g, "").trim();
+    if (!l) { if (out.length) break; else continue; }
+    if (/^none\b/i.test(l)) continue;
+    if (l.length > 3) out.push(l);
+    if (out.length >= 3) break;
+  }
+  return out;
+}
 function splitAiReport(text: string): { technique: string; findings: string; impression: string; recommendations: string } {
   const re = /(?:^|\n)[ \t]*(?:#{1,4}[ \t]*)?(?:\*\*)?[ \t]*([A-Za-z][A-Za-z /&]{1,26}?)[ \t]*(?:\*\*)?[ \t]*:?[ \t]*(?=\n|$)/g;
   const marks: { at: number; end: number; keep: string | null }[] = [];
@@ -220,9 +237,10 @@ export default function Viewer() {
   const [reportTechnique, setReportTechnique] = useState("");
   const [reportRecs, setReportRecs] = useState("");
   const [reportHistory, setReportHistory] = useState("");
-  const [askAi, setAskAi] = useState(false);
+  const [showQuestions, setShowQuestions] = useState(false); // result-driven questions AFTER the first read
+  const [aiQuestions, setAiQuestions] = useState<string[]>([]);
+  const pendingRef = useRef<{ preliminary: string; meta: any; refineImages: string[]; refineLabels: string[]; selected: boolean } | null>(null);
   const [aiPicks, setAiPicks] = useState<string[]>([]); // imageIds hand-picked for focused analysis
-  const [aiMode, setAiMode] = useState<"study" | "selected">("study");
   const [showPicks, setShowPicks] = useState(false);
   const [snapshot, setSnapshot] = useState("");
   const [keyImages, setKeyImages] = useState<KeyImage[]>([]);
@@ -747,30 +765,24 @@ export default function Viewer() {
     return { images, labels };
   }
 
-  // The AI asks for clinical history first (better, targeted report) — user can skip.
-  function runAi() {
-    if (!study || ai.loading) return;
-    setAiMode("study"); setAskAi(true);
-  }
-  function runAiSelected() {
-    if (!study || ai.loading || !aiPicks.length) return;
-    setAiMode("selected"); setShowPicks(false); setAskAi(true);
-  }
+  // Analyze straight away (no upfront questions), then ask result-driven questions before the report.
+  function runAi() { if (!study || ai.loading) return; startAnalysis("study"); }
+  function runAiSelected() { if (!study || ai.loading || !aiPicks.length) return; setShowPicks(false); startAnalysis("selected"); }
 
-  async function startAnalysis(history: string) {
+  const post = (payload: any) => fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then((r) => r.json());
+
+  // Phase 1 — read the images and produce a PRELIMINARY report + result-driven questions.
+  async function startAnalysis(mode: "study" | "selected") {
     if (!study) return;
-    const selected = aiMode === "selected" && aiPicks.length > 0;
-    setReportHistory(history);
+    const selected = mode === "selected" && aiPicks.length > 0;
+    setReportHistory(""); pendingRef.current = null;
     setAi({ loading: true }); setAiProgress({ done: 0, total: 1, phase: "Preparing" });
     try {
-      // 1) Render the images: hand-picked (full-res) or the whole study (grouped montages).
       const { images, labels } = selected ? await buildSelectedImages(aiPicks) : await buildStudyMontages();
       if (!images.length) { setAiProgress(null); setAi({ loading: false, connected: false, message: "Couldn't render the study." }); return; }
+      const meta = { name: study.name, modality: study.modality, imageCount: study.imageIds.length, seriesCount: study.series.length };
 
-      const meta = { name: study.name, modality: study.modality, imageCount: study.imageIds.length, seriesCount: study.series.length, history };
-      const post = (payload: any) => fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then((r) => r.json());
-
-      // 2) Analyze in batches (few images each) so every slice is read at full detail.
+      // Batch read (every image at full detail), then synthesize.
       const BATCH = 6;
       const batches = Math.ceil(images.length / BATCH);
       const notes: string[] = [];
@@ -784,26 +796,44 @@ export default function Viewer() {
       }
       if (!notes.length) { setAiProgress(null); setAi({ loading: false, connected: false, message: lastError || "No findings returned. Is the AI model running? (check the health badge)" }); return; }
 
-      // 3) Merge the batch notes into one final report.
-      setAiProgress({ done: batches, total: batches + 2, phase: notes.length > 1 ? "Synthesizing report" : "Formatting report" });
+      setAiProgress({ done: batches, total: batches + 1, phase: notes.length > 1 ? "Synthesizing report" : "Formatting report" });
       const sdata = await post({ mode: "synthesize", ...meta, notes });
-      let finalText: string = (sdata?.connected && sdata?.text) ? sdata.text : notes.join("\n\n");
+      const preliminary: string = (sdata?.connected && sdata?.text) ? sdata.text : notes.join("\n\n");
 
-      // 4) High-resolution confirmation pass — re-read the impression/key slices at full 896
-      //    (CT = 3-window RGB) and let the model correct/confirm the report on a closer look.
-      //    Skipped for hand-picked analysis (those images were already read at full resolution).
-      const keyRefs = selected ? [] : parseKeyImageRefs(finalText);
-      if (keyRefs.length) {
-        setAiProgress({ done: batches + 1, total: batches + 2, phase: `Re-reading ${keyRefs.length} key image(s) at high resolution` });
-        try {
-          const kf = await renderKeyFullRes(keyRefs);
-          if (kf.images.length) {
-            const rdata = await post({ mode: "refine", ...meta, priorReport: finalText, views: kf.labels, images: kf.images });
-            if (rdata?.connected && rdata?.text) finalText = rdata.text;
-          }
-        } catch { /* keep the synthesized report if the refine pass fails */ }
+      // Prepare the full-resolution key images for the follow-up re-analysis.
+      let refineImages: string[] = [], refineLabels: string[] = [];
+      if (selected) { refineImages = images.slice(0, 12); refineLabels = labels.slice(0, 12); }
+      else {
+        const keyRefs = parseKeyImageRefs(preliminary);
+        if (keyRefs.length) { const kf = await renderKeyFullRes(keyRefs); refineImages = kf.images; refineLabels = kf.labels; }
       }
+      pendingRef.current = { preliminary, meta, refineImages, refineLabels, selected };
 
+      // Ask the result-driven questions the model raised — then re-analyze. Skippable.
+      const questions = parseQuestions(preliminary);
+      if (questions.length) {
+        setAiQuestions(questions);
+        setAiProgress(null); setAi({ loading: false });
+        setShowQuestions(true);
+      } else {
+        await finishAnalysis("");
+      }
+    } catch (e: any) { setAiProgress(null); setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
+  }
+
+  // Phase 2 — re-analyze the key images at full resolution WITH the clinician's answers → final report.
+  async function finishAnalysis(answers: string) {
+    const p = pendingRef.current; if (!p || !study) return;
+    setShowQuestions(false); setReportHistory(answers);
+    setAi({ loading: true }); setAiProgress({ done: 0, total: 1, phase: answers ? "Re-analyzing with your answers" : "Finalizing report" });
+    try {
+      let finalText = p.preliminary;
+      // Refine when the clinician answered, or (whole-study) to do the high-res key-image recheck.
+      // For hand-picked mode with no answers, the picks were already read at full res — skip.
+      if (answers || (!p.selected && p.refineImages.length)) {
+        const rdata = await post({ mode: "refine", ...p.meta, history: answers, priorReport: p.preliminary, views: p.refineLabels, images: p.refineImages });
+        if (rdata?.connected && rdata?.text) finalText = rdata.text;
+      }
       const cv = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
       setSnapshot(cv ? cv.toDataURL("image/png") : "");
       const parts = splitAiReport(finalText);
@@ -811,13 +841,12 @@ export default function Viewer() {
       setReportFindings(parts.findings || finalText);
       setReportImpression(parts.impression);
       setReportRecs(parts.recommendations);
-      // 5) Capture the exact slices the final report called out as "Key Images".
-      setAiProgress({ done: batches + 2, total: batches + 2, phase: "Capturing key images" });
+      setAiProgress({ done: 1, total: 1, phase: "Capturing key images" });
       try { setKeyImages(await renderKeyImages(parseKeyImageRefs(finalText))); } catch { setKeyImages([]); }
       setAiProgress(null);
       setAi({ loading: false, connected: true, text: finalText });
       setShowReport(true); // auto-open the beautiful, editable report
-      toast(selected ? `AI read ${aiPicks.length} selected image(s) at full resolution · report ready` : `AI analysis complete — ${batches} batch${batches > 1 ? "es" : ""} + high-res recheck · report ready`);
+      toast(answers ? "Re-analyzed with your answers · report ready" : "Report ready");
     } catch (e: any) { setAiProgress(null); setAi({ loading: false, connected: false, message: `Request failed: ${e?.message || e}` }); }
   }
 
@@ -1040,7 +1069,7 @@ export default function Viewer() {
           onCopy={() => { navigator.clipboard?.writeText(ai.text || ""); toast("Findings copied"); }}
           onReport={() => { setShowAiResult(false); openReport(ai.text || ""); }} />
       )}</AnimatePresence>
-      <AnimatePresence>{askAi && study && <AskHistoryModal study={study} focus={aiMode === "selected" ? aiPicks.length : 0} onGo={(h) => { setAskAi(false); startAnalysis(h); }} onClose={() => setAskAi(false)} />}</AnimatePresence>
+      <AnimatePresence>{showQuestions && study && <QuestionsModal questions={aiQuestions} onSubmit={(a) => finishAnalysis(a)} onSkip={() => finishAnalysis("")} />}</AnimatePresence>
       <AnimatePresence>{showReport && study && <ReportModal study={study} ai={ai} snapshot={snapshot} measurements={measurements} initialFindings={reportFindings} initialImpression={reportImpression} initialTechnique={reportTechnique} initialRecs={reportRecs} initialHistory={reportHistory} keyImages={keyImages} onClose={() => setShowReport(false)} onSaved={() => toast("Report downloaded")} />}</AnimatePresence>
       <AnimatePresence>{showExport && activeSeries && <ExportModal seriesName={activeSeries.name} total={total} current={index + 1} fps={fps} onClose={() => setShowExport(false)} onExport={exportRun} />}</AnimatePresence>
     </div>
@@ -1245,37 +1274,34 @@ function ExportModal({ seriesName, total, current, fps, onClose, onExport }: { s
 }
 
 // Pre-analysis question: clinical history sharpens the read; fully skippable.
-function AskHistoryModal({ study, focus = 0, onGo, onClose }: { study: LoadedStudy; focus?: number; onGo: (history: string) => void; onClose: () => void }) {
-  const [h, setH] = useState("");
-  const chips = ["Chest pain", "Trauma", "Fever / infection", "Follow-up", "Screening", "Shortness of breath", "Post-operative"];
-  const m = study.modality.toUpperCase();
-  const note = focus > 0
-    ? `Reading your ${focus} selected image(s) at full 896 resolution — the model's most careful, highest-accuracy mode.`
-    : /X.?RAY|CR|DX|DR|MG|US|OP|SM|DERM|FUND/.test(m) || study.imageIds.length <= 4
-      ? "This is the model's strongest input type — read at full resolution."
-      : /CT|MR|MRI/.test(m)
-        ? "CT/MRI support is early (~60–65% on findings) — treat this as a second look, not a diagnosis."
-        : "Decision support only — verify against the full study.";
+// After the first read, the model asks the clinical questions its findings raised.
+// Answering them triggers a full-resolution re-analysis; skipping keeps the preliminary report.
+function QuestionsModal({ questions, onSubmit, onSkip }: { questions: string[]; onSubmit: (answers: string) => void; onSkip: () => void }) {
+  const [ans, setAns] = useState<string[]>(() => questions.map(() => ""));
+  const compiled = questions.map((q, i) => (ans[i].trim() ? `${q.replace(/\?+$/, "")}? ${ans[i].trim()}` : "")).filter(Boolean).join(" ");
+  const anyAnswered = ans.some((a) => a.trim());
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} onClick={(e) => e.stopPropagation()} className="w-full max-w-md panel p-0">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-4">
+      <motion.div initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }} className="flex max-h-[88vh] w-full max-w-lg flex-col panel p-0">
         <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
-          <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-teal-300" /><span className="text-sm font-semibold text-white">{focus > 0 ? `Before I read your ${focus} selected image(s)…` : `Before I read this ${study.modality} study…`}</span></div>
-          <button onClick={onClose} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button>
+          <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-teal-300" /><span className="text-sm font-semibold text-white">A few questions to sharpen the report</span></div>
+          <button onClick={onSkip} className="text-slate-500 hover:text-white"><X className="h-4 w-4" /></button>
         </div>
-        <div className="space-y-3 p-5">
-          <p className="text-xs text-slate-400">Any <span className="text-slate-200">clinical history or indication</span>? It sharpens the Findings and Impression. You can skip this.</p>
-          <p className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] text-slate-400">{note}</p>
-          <textarea autoFocus value={h} onChange={(e) => setH(e.target.value)} rows={3} placeholder="e.g. 54 y/o male, atypical chest pain, r/o CAD. Known diabetic."
-            onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) onGo(h.trim()); }}
-            className="w-full rounded-lg border border-white/10 bg-navy-850 p-2.5 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50" />
-          <div className="flex flex-wrap gap-1.5">
-            {chips.map((c) => <button key={c} onClick={() => setH((v) => (v ? `${v}; ${c}` : c))} className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-300 hover:bg-teal-500/10 hover:text-teal-300">{c}</button>)}
-          </div>
+        <div className="flex-1 space-y-3 overflow-y-auto p-5">
+          <p className="text-xs text-slate-400">I've read the images. Answering these will let me <span className="text-teal-300">re-analyze and give a more accurate report</span>. Answer what you can — or skip.</p>
+          {questions.map((q, i) => (
+            <label key={i} className="block">
+              <span className="text-[13px] text-slate-200">{q.replace(/\?*$/, "?")}</span>
+              <input autoFocus={i === 0} value={ans[i]} onChange={(e) => setAns((a) => a.map((x, j) => (j === i ? e.target.value : x)))}
+                onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && anyAnswered) onSubmit(compiled); }}
+                placeholder="Your answer (optional)"
+                className="mt-1 h-9 w-full rounded-lg border border-white/10 bg-navy-850 px-2.5 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50" />
+            </label>
+          ))}
         </div>
         <div className="flex justify-end gap-2 border-t border-white/10 px-5 py-3.5">
-          <button onClick={() => onGo("")} className="btn-ghost">Skip — analyze without history</button>
-          <button onClick={() => onGo(h.trim())} disabled={!h.trim()} className="btn-primary disabled:opacity-50"><Sparkles className="h-4 w-4" /> Analyze</button>
+          <button onClick={onSkip} className="btn-ghost">Skip — keep this report</button>
+          <button onClick={() => onSubmit(compiled)} disabled={!anyAnswered} className="btn-primary disabled:opacity-50"><Sparkles className="h-4 w-4" /> Re-analyze with answers</button>
         </div>
       </motion.div>
     </motion.div>

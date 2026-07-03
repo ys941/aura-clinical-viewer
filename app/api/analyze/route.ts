@@ -29,6 +29,7 @@ const SYSTEM_SYNTH =
   "## Impression\n1. Numbered, concise clinical conclusions — most significant first.\n\n" +
   "## Recommendations\n- 1–3 short, actionable next steps. Write '- Clinical correlation.' if nothing specific.\n\n" +
   "## Key Images\n- Slice <number>: <what it shows> — the most representative images from the drafts. Write '- None' if unremarkable.\n\n" +
+  "## Questions\nUp to 3 brief clinical questions whose answers would most refine or change your interpretation (e.g. smoking history, known malignancy, symptom onset/duration, trauma, fever, prior surgery/device). One per line, ending with '?'. Write 'None' if the images are self-explanatory. This section is for the clinician, not part of the diagnosis.\n\n" +
   "Do NOT invent findings that are not in the drafts. If clinical history is provided, address it in the Impression. " + STYLE;
 
 // Used by the high-resolution confirmation pass: re-read the key images and finalize.
