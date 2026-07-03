@@ -483,6 +483,8 @@ export default function Viewer() {
       switch (cmd) {
         case "wheel": { const m = val === "zoom" ? "zoom" : "stack"; wheelModeRef.current = m; setWheelMode(m); applyWheel(m); break; }
         case "window": { if (Number.isFinite(num("ww")) && Number.isFinite(num("wc"))) applyWL(num("ww"), num("wc")); else if (WL[val]) applyWL(WL[val][0], WL[val][1]); break; }
+        case "brightness": withViewport((vp) => { const ww = vp.voi.windowWidth || 400; const step = Math.max(1, ww * 0.12); vp.voi.windowCenter += (val === "down" ? step : -step); }); break;
+        case "contrast": withViewport((vp) => { const ww = vp.voi.windowWidth || 400; const step = Math.max(1, ww * 0.15); vp.voi.windowWidth = Math.max(1, val === "up" ? ww - step : ww + step); }); break;
         case "tool": { const t = TOOLMAP[val]; if (t) selectTool(t); break; }
         case "zoom": { if (val === "in") zoomBy(1.25); else if (val === "out") zoomBy(0.8); else if (val === "fit") fit(); else if (val === "fill") fill(); else if (val === "actual" || val === "1:1") oneToOne(); else if (Number.isFinite(num("percent"))) setZoom(num("percent")); break; }
         case "rotate": rotate(); break;
@@ -505,6 +507,14 @@ export default function Viewer() {
     };
   });
   useEffect(() => onAppCommand((c) => cmdRef.current(c)), []);
+
+  // Let the chatbot grab the slice currently on screen (with its live window/brightness).
+  useEffect(() => {
+    (window as any).__auraCaptureViewer = () => {
+      try { const cv = elRef.current?.querySelector("canvas") as HTMLCanvasElement | null; return cv ? cv.toDataURL("image/jpeg", 0.9) : null; } catch { return null; }
+    };
+    return () => { try { delete (window as any).__auraCaptureViewer; } catch {} };
+  }, []);
 
   async function onFiles(files: File[]) {
     if (!apiRef.current) return;

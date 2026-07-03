@@ -12,6 +12,8 @@ Settings you can change:
 
 Viewer controls (the image viewer). Use action "viewer" with params {"command": <one below>, and extra fields as noted}:
 - "window", value: soft | angio | lung | bone | brain   — OR custom: {"command":"window","ww":<number>,"wc":<number>}
+- "brightness", value: up | down   (brighter / darker)
+- "contrast", value: up | down     (more / less contrast)
 - "wheel", value: zoom | scroll
 - "tool", value: pan | zoom | magnify | length | angle | rectangle | ellipse | probe | annotate | freehand | windowlevel
 - "zoom", value: in | out | fit | fill | actual   — OR {"command":"zoom","percent":<number>}
@@ -97,7 +99,7 @@ export async function POST(req: Request) {
       if (typeof p.geminiModel === "string" && p.geminiModel.trim()) params.geminiModel = p.geminiModel.trim().slice(0, 60);
       if (typeof p.groqModel === "string" && p.groqModel.trim()) params.groqModel = p.groqModel.trim().slice(0, 60);
     } else if (action === "viewer") {
-      const cmds = ["window", "wheel", "tool", "zoom", "rotate", "flip", "invert", "overlays", "panel", "fullscreen", "reset", "clear", "copy", "cine", "fps", "navigate", "series", "pin", "analyze", "report"];
+      const cmds = ["window", "brightness", "contrast", "wheel", "tool", "zoom", "rotate", "flip", "invert", "overlays", "panel", "fullscreen", "reset", "clear", "copy", "cine", "fps", "navigate", "series", "pin", "analyze", "report"];
       if (cmds.includes(p.command)) {
         params.command = p.command;
         if (typeof p.value === "string") params.value = p.value.trim().toLowerCase().slice(0, 20);

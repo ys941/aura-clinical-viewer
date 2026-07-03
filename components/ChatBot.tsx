@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useUser } from "@clerk/nextjs";
-import { X, Send, ImagePlus, Loader2, Trash2 } from "lucide-react";
+import { X, Send, ImagePlus, Loader2, Trash2, Monitor } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { getChatSettings, setChatSettings } from "@/lib/chatSettings";
 import { setReportPrefs } from "@/lib/reportPrefs";
@@ -11,7 +11,7 @@ import { dispatchAppCommand } from "@/lib/appCommands";
 type Msg = { role: "user" | "assistant"; text: string; images?: string[] };
 
 // Heuristic: does this text-only message look like a request to change a setting or drive the viewer?
-const SETTINGS_HINT = /\b(set|change|update|make|rename|call me|my name|i am|i'?m|name is|role|radiologist|cardiologist|pathologist|clinician|resident|technologist|organization|organisation|company|clinic|centre|center|hospital|doctor|dr\.?|letterhead|signature|qualification|registration|reg\.?\s*no|model|gemini|medgemma|groq|profile|window|level|preset|lung|bone|brain|soft tissue|angio|wheel|zoom|scroll|overlay|invert|full ?screen|reset|clear|copy|rotate|flip|cine|play|pause|fps|tool|pan|magnify|length|angle|rectangle|ellipse|probe|annotate|freehand|next|previous|prev|first|last|slice|series|panel|tags|pin|analy[sz]e|report|open)\b/i;
+const SETTINGS_HINT = /\b(set|change|update|make|rename|call me|my name|i am|i'?m|name is|role|radiologist|cardiologist|pathologist|clinician|resident|technologist|organization|organisation|company|clinic|centre|center|hospital|doctor|dr\.?|letterhead|signature|qualification|registration|reg\.?\s*no|model|gemini|medgemma|groq|profile|window|level|preset|lung|bone|brain|soft tissue|angio|brightness|contrast|brighter|darker|lighter|dim|wheel|zoom|scroll|overlay|invert|full ?screen|reset|clear|copy|rotate|flip|cine|play|pause|fps|tool|pan|magnify|length|angle|rectangle|ellipse|probe|annotate|freehand|next|previous|prev|first|last|slice|series|panel|tags|pin|analy[sz]e|report|open)\b/i;
 
 // Change assistant settings by chatting (text-only). Returns a reply, or null to fall through to the model.
 function handleSettingsCommand(text: string): string | null {
@@ -70,6 +70,21 @@ async function fileToDataUrl(file: File, max = 896): Promise<string> {
     return c.toDataURL("image/jpeg", 0.9);
   } finally { URL.revokeObjectURL(url); }
 }
+
+async function dataUrlResize(src: string, max = 896): Promise<string> {
+  try {
+    const img = await new Promise<HTMLImageElement>((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+    const scale = Math.min(1, max / Math.max(img.width, img.height));
+    if (scale >= 1) return src;
+    const w = Math.max(1, Math.round(img.width * scale)), h = Math.max(1, Math.round(img.height * scale));
+    const c = document.createElement("canvas"); c.width = w; c.height = h; c.getContext("2d")!.drawImage(img, 0, 0, w, h);
+    return c.toDataURL("image/jpeg", 0.9);
+  } catch { return src; }
+}
+// The slice currently shown in the viewer (with its live window/brightness).
+function captureViewer(): string | null { try { return (window as any).__auraCaptureViewer?.() || null; } catch { return null; } }
+// Phrases that mean "look at what's on my screen" — but NOT the whole-study/pinned run commands.
+const REFERS_TO_VIEW = /\b(what('?s| is| do you| are you)?\s*(you\s*)?(see|seeing|showing)|what is this|what'?s this|this (image|slice|scan|x-?ray|film|ct|mri|study)|current (image|slice|view)|on[- ]?screen|read (this|it)|describe (this|it)|diagnos)/i;
 
 export function ChatBot() {
   const { user } = useUser();
@@ -130,10 +145,21 @@ export function ChatBot() {
     }
   }
 
+  async function useCurrentView() {
+    const raw = captureViewer();
+    if (!raw) { setMessages((m) => [...m, { role: "assistant", text: "No image is open in the viewer — open a study first, then I can look at the current slice." }]); return; }
+    try { const d = await dataUrlResize(raw); setStaged((s) => [...s, d].slice(0, 4)); } catch {}
+  }
+
   async function send() {
     const text = input.trim();
     if ((!text && !staged.length) || loading) return;
-    const imgs = staged;
+    let imgs = staged;
+    // "what's on my screen?" → automatically grab the slice currently shown in the viewer.
+    if (!imgs.length && text && REFERS_TO_VIEW.test(text) && !/\b(whole|entire|full)\s+study\b|\bpinned\b/i.test(text)) {
+      const raw = captureViewer();
+      if (raw) { try { imgs = [await dataUrlResize(raw)]; } catch {} }
+    }
     const userMsg: Msg = { role: "user", text: text || "What can you tell me about this image?", images: imgs };
     const history = [...messages, userMsg];
     setMessages(history); setInput(""); setStaged([]);
@@ -208,7 +234,7 @@ export function ChatBot() {
             {messages.length === 0 && (
               <div className="mt-8 flex flex-col items-center text-center">
                 <span className="mb-3 h-16 w-16"><SiriOrb /></span>
-                <p className="text-sm text-slate-300">Drop, paste, or upload a medical image and ask me anything about it.</p>
+                <p className="text-sm text-slate-300">Drop, paste, or upload an image — or tap <Monitor className="inline h-3.5 w-3.5" /> to grab the slice on screen — and ask me about it.</p>
                 <p className="mt-1 text-[11px] text-slate-500">Educational decision support — not a diagnosis.</p>
               </div>
             )}
@@ -240,6 +266,7 @@ export function ChatBot() {
 
           {/* input */}
           <div className="flex items-end gap-2 border-t border-white/10 p-3">
+            <button onClick={useCurrentView} title="Attach the slice currently on screen" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"><Monitor className="h-4 w-4" /></button>
             <button onClick={() => fileRef.current?.click()} title="Attach image" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"><ImagePlus className="h-4 w-4" /></button>
             <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} />
             <textarea value={input} onChange={(e) => setInput(e.target.value)} onPaste={onPaste}
