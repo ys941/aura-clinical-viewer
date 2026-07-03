@@ -94,10 +94,10 @@ npm run dev          # → http://localhost:4477
 
 | Script | What it does |
 |---|---|
-| **`start-all.bat`** ⭐ | **The one button to rule them all** — opens the MedGemma **Colab** notebook, installs deps (first run), starts the app, opens the browser. AI endpoint auto‑syncs. |
-| **`build-and-start.bat`** | Production build + `npm start` (snappier, optimized). |
+| **`setup-and-run.bat`** 🪄 | **Zero‑to‑running.** Installs **Node.js** if you don't have it, installs all deps, writes a `.env.local` with everything pre‑filled **except** your two Clerk keys (opens Clerk + Notepad for you), opens Colab, and launches the app. You literally only paste the keys. |
+| **`start-all.bat`** ⭐ | Everyday launcher (Node already installed) — opens the MedGemma **Colab** notebook, installs deps first run, starts the app, opens the browser. `start-all.bat prod` = optimized build. |
 
-There's also an **"Aura Viewer"** desktop shortcut (points at `start-all.bat`). Close the terminal window to shut it all down.
+First time on a fresh machine? Use **`setup-and-run.bat`**. After that, **`start-all.bat`** is your daily driver. Close the terminal window to shut it all down.
 
 ---
 
