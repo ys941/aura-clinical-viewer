@@ -230,8 +230,13 @@ export default function SettingsPage() {
           )}
           {modelErr && <p className="text-xs text-amber-400">{modelErr}</p>}
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button onClick={saveChat} className="btn-primary">{chatSaved ? <Check className="h-4 w-4" /> : null}{chatSaved ? "Saved" : "Save assistant settings"}</button>
+            {(geminiKey || groqKey) && (
+              <button onClick={() => { setGeminiKey(""); setGroqKey(""); setChatSettings({ geminiKey: "", groqKey: "" }); }} className="btn-ghost">
+                Clear keys from browser
+              </button>
+            )}
           </div>
           <p className="text-[11px] leading-relaxed text-slate-500">
             🔒 Keys entered here are stored <b>only in this browser</b> and sent <b>only to your own server</b> (never directly to Google/Groq from the browser, never in the app bundle).
