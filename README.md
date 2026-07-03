@@ -43,7 +43,8 @@ Most web DICOM viewers are either read‑only toys or bloated enterprise PACS th
 
 - **Everything's local.** Pixels get decoded and rendered client‑side. **No database. Nothing leaves your machine** unless *you* press the AI button. Privacy? Immaculate.
 - **It eats anything.** DICOM/PACS, CT, MRI, CTCA, CAG, Echo, X‑Ray, OCT, Fundus, histopath, plain images, and chonky **multi‑series ZIPs**. All one viewer. No fuss.
-- **The AI reads EVERY slice** of the whole study, grouped **by view** (axial / coronal / sagittal), then drops per‑view findings + **key images** into a report that's genuinely *pretty*.
+- **The AI reads it like a radiologist** — full‑res for 2D, 3‑window RGB for CT, every slice by view — then reads first, **asks the questions its findings raise**, and re‑reads for a formal report.
+- **Pin the exact slices** you care about (across films) for a focused full‑resolution read, or **chat** with the floating **Siri‑style assistant** — drop/paste/upload any image and ask in **any language**.
 - **The AI is free.** Real **MedGemma 1.5 (vision)** on a free Google Colab GPU. Zero dollars. Chef's kiss. 👨‍🍳💋
 
 ---
@@ -69,11 +70,25 @@ One engine renders DICOM *and* normal images, with real DICOM decoding. Not a sc
 ### 🎞 Cine + export for the slides
 Play multi‑frame runs (FPS control + scrubber), then **export a run** — whole thing, a **range**, or a single slide — as an animated **GIF** or a **PNG zip**. Yeet it straight into PowerPoint/Word. 🎬
 
-### 🤖 AI that actually reads the study — by view
-One click → **every slice** of the study gets analyzed (with a **colorful rotating ring** + progress bar), powered by **MedGemma 1.5 4B (vision)** or Gemini/Gemma. It reads the study the way a radiologist writes it up: findings grouped **by view** (Axial / Coronal / Sagittal, or the projection it identifies) — not by series name — plus an **Impression** and a **Key Images** list of the exact slices that show the findings. The model's mumbly "thinking" tokens get cleaned out.
+### 🤖 AI that actually reads the study — the MedGemma way
+One click → analysis kicks off with a **colorful rotating ring** + progress bar, powered by **MedGemma 1.5 4B (vision)** or Gemini/Gemma. It's tuned to how MedGemma actually works:
+- **2D studies (CXR, X‑ray, derm, fundus, path, plain images)** → each image sent at **full 896×896** (MedGemma's strongest, native input) — no shrinking into tiles.
+- **CT** → the **official 3‑window→RGB** preprocessing (bone/lung · soft‑tissue · brain), every slice.
+- **MR / volumetric** → compact tiles covering **every slice**, grouped **by view** (Axial / Coronal / Sagittal, derived from `ImageOrientationPatient`, never by series name).
 
-### 📋 A report that pulls up looking fine
-After analysis the **editable report opens itself**, pre‑filled with **all your patient/study details** (editable!), a **Technique** line, per‑view **Findings**, a split‑out **Impression**, and a **Key Images gallery** — thumbnails of the exact slices the AI flagged, each captioned with slice # + view. Export a styled standalone **`report.html`** with a built‑in **🖨 Print / Save PDF** button.
+It reads the study like a radiologist writes it: **Findings by anatomical structure**, numbered **Impression**, **Recommendations**, and a **Key Images** list — with the model's "thinking"/teaching/junk tokens stripped out.
+
+### 🎯 Pin exactly what matters (highest accuracy)
+Scroll to any slice and hit **Pin** (or press **`P`**) — across **any films/series** of the patient. Pin 8–10 and the **AI** button flips to **"Analyze N pinned"**: it reads *only* those, each at **full 896 resolution** (CT = 3‑window RGB). Nothing pinned → it reads the whole study. Human‑in‑the‑loop, no triage miss.
+
+### ❓ Asks, then re‑reads — for an accurate report
+No generic questions up front. It **reads first**, then asks the **clinical questions its findings actually raised** (smoking history? prior malignancy? symptom duration?) — fully skippable. Your answers trigger a **full‑resolution re‑analysis of the key slices** → a sharper final report.
+
+### 💬 Aura Assistant — the floating Siri orb
+A glowing animated orb bottom‑right. **Drop, paste, or upload** any medical image and **chat** about it in **any language** (it mirrors yours). Multi‑turn, image‑aware, powered by the same MedGemma.
+
+### 📋 A report that looks like a real radiology report
+After analysis the **editable report opens itself** — a formal **letterhead layout** (your centre + reporting doctor, remembered on your device), patient table, exam title, **Clinical History → Findings → Impression → Advice → Key Images gallery**, signature block, and "electronically verified." Export a styled standalone **`report.html`** with a built‑in **🖨 Print / Save PDF** button. Format follows the **ACR / RSNA** structured‑reporting standard.
 
 ### 🔐 Auth + settings, no cap
 **Clerk** handles login — email/password **and Google SSO** + password reset. Settings let you change your photo, name, role, org (stored on your account, not some database).
