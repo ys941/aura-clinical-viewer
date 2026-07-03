@@ -386,6 +386,16 @@ export default function Viewer() {
       applyDefaultWL();
       try { api.cornerstone.resize(el, true); api.cornerstone.fitToWindow(el); } catch {}
     })();
+    // Keep React `index` in sync when the mouse wheel / stack scroll changes the slice,
+    // so Pin (and the status bar) always reflect the slice that is actually on screen.
+    const onNewImage = (e: any) => {
+      const id = e?.detail?.image?.imageId;
+      if (!id) return;
+      const idx = activeSeries.imageIds.indexOf(id);
+      if (idx >= 0) setIndex(idx);
+    };
+    el.addEventListener("cornerstonenewimage", onNewImage);
+    return () => { try { el.removeEventListener("cornerstonenewimage", onNewImage); } catch {} };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSeries]);
 
