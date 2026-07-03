@@ -1,0 +1,63 @@
+import { NextResponse } from "next/server";
+
+export const runtime = "nodejs";
+
+// Gemini decides whether a message changes an app SETTING, and extracts the values.
+const AGENT = `You are the settings agent for Aura, a medical-imaging web app. Read the user's message and decide if they want to change an app SETTING. If so, pick the action and extract ONLY the fields they mentioned. Otherwise answer normally.
+
+Settings you can change:
+- profile: firstName, lastName, role (one of: Radiologist, Cardiologist, Ophthalmologist, Pathologist, Clinician, Resident, Technologist, Administrator), organization
+- letterhead (used on generated reports): clinicName, clinicAddress, doctorName, doctorCreds (qualifications / registration number)
+- chat_model: provider ("medgemma" or "gemini"), geminiModel
+
+Respond with JSON ONLY, matching:
+{"action":"set_profile"|"set_letterhead"|"set_chat_model"|"answer","params":{ ...only the fields to change... },"reply":"<one short sentence confirming what you changed, or your normal answer — in the SAME language the user wrote in>"}
+
+If it is NOT a settings request, use "action":"answer" and put a normal, helpful reply in "reply". Never invent values the user didn't give.`;
+
+const ROLES = ["Radiologist", "Cardiologist", "Ophthalmologist", "Pathologist", "Clinician", "Resident", "Technologist", "Administrator"];
+
+export async function POST(req: Request) {
+  let body: any = {};
+  try { body = await req.json(); } catch {}
+  const message = String(body?.message || "").slice(0, 2000);
+  const key = (String(body?.geminiKey || "") || process.env.GEMINI_API_KEY || "").trim();
+  const model = (String(body?.geminiModel || "") || process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
+  if (!message) return NextResponse.json({ action: "answer", reply: "How can I help?" });
+  if (!key) return NextResponse.json({ action: "answer", reply: "Add a Gemini API key in Settings → AI Assistant (or say “my gemini key is AIza…”) so I can change settings for you by chat." });
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${key}`;
+    const r = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: AGENT }] },
+        contents: [{ role: "user", parts: [{ text: message }] }],
+        generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
+      }),
+    });
+    if (!r.ok) { const t = await r.text().catch(() => ""); return NextResponse.json({ action: "answer", reply: `Gemini error ${r.status}. ${t.slice(0, 150)}` }); }
+    const data = await r.json();
+    const text = (data?.candidates?.[0]?.content?.parts || []).map((p: any) => p?.text || "").join("").trim();
+    let parsed: any = {};
+    try { parsed = JSON.parse(text); } catch { return NextResponse.json({ action: "answer", reply: text || "Okay." }); }
+
+    const action = ["set_profile", "set_letterhead", "set_chat_model", "answer"].includes(parsed?.action) ? parsed.action : "answer";
+    const p = parsed?.params && typeof parsed.params === "object" ? parsed.params : {};
+    // whitelist + sanitize params per action
+    const params: any = {};
+    if (action === "set_profile") {
+      for (const k of ["firstName", "lastName", "organization"]) if (typeof p[k] === "string" && p[k].trim()) params[k] = p[k].trim().slice(0, 80);
+      if (typeof p.role === "string") { const m = ROLES.find((r) => r.toLowerCase() === p.role.trim().toLowerCase()); if (m) params.role = m; }
+    } else if (action === "set_letterhead") {
+      for (const k of ["clinicName", "clinicAddress", "doctorName", "doctorCreds"]) if (typeof p[k] === "string") params[k] = p[k].trim().slice(0, 160);
+    } else if (action === "set_chat_model") {
+      if (p.provider === "gemini" || p.provider === "medgemma") params.provider = p.provider;
+      if (typeof p.geminiModel === "string" && p.geminiModel.trim()) params.geminiModel = p.geminiModel.trim().slice(0, 60);
+    }
+    const reply = typeof parsed?.reply === "string" && parsed.reply.trim() ? parsed.reply.trim() : "Done.";
+    return NextResponse.json({ action: Object.keys(params).length || action === "answer" ? action : "answer", params, reply });
+  } catch (e: any) {
+    return NextResponse.json({ action: "answer", reply: e?.name === "TimeoutError" ? "Gemini took too long — try again." : "Couldn't reach Gemini. Check your key and try again." });
+  }
+}

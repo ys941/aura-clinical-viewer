@@ -1,11 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useUser } from "@clerk/nextjs";
 import { X, Send, ImagePlus, Loader2, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { getChatSettings, setChatSettings } from "@/lib/chatSettings";
+import { setReportPrefs } from "@/lib/reportPrefs";
 
 type Msg = { role: "user" | "assistant"; text: string; images?: string[] };
+
+// Heuristic: does this text-only message look like a request to change an app setting?
+const SETTINGS_HINT = /\b(set|change|update|make|rename|call me|my name|i am|i'?m|name is|role|radiologist|cardiologist|pathologist|clinician|resident|technologist|organization|organisation|company|clinic|centre|center|hospital|doctor|dr\.?|letterhead|signature|qualification|registration|reg\.?\s*no|model|gemini|medgemma|profile)\b/i;
 
 // Change assistant settings by chatting (text-only). Returns a reply, or null to fall through to the model.
 function handleSettingsCommand(text: string): string | null {
@@ -57,6 +62,7 @@ async function fileToDataUrl(file: File, max = 896): Promise<string> {
 }
 
 export function ChatBot() {
+  const { user } = useUser();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -80,6 +86,36 @@ export function ChatBot() {
     if (files.length) { e.preventDefault(); addFiles(files); }
   }
 
+  // Apply a settings action returned by the Gemini agent, then return the confirmation text.
+  async function applyAction(act: any): Promise<string> {
+    const action = act?.action, p = act?.params || {}, reply = typeof act?.reply === "string" ? act.reply : "Done.";
+    try {
+      if (action === "set_profile" && user) {
+        const update: any = {};
+        if (typeof p.firstName === "string") update.firstName = p.firstName;
+        if (typeof p.lastName === "string") update.lastName = p.lastName;
+        if (p.role !== undefined || p.organization !== undefined) {
+          update.unsafeMetadata = { ...(user.unsafeMetadata || {}) };
+          if (p.role !== undefined) update.unsafeMetadata.role = p.role;
+          if (p.organization !== undefined) update.unsafeMetadata.organization = p.organization;
+        }
+        if (Object.keys(update).length) await user.update(update);
+      } else if (action === "set_letterhead") {
+        const patch: any = {};
+        for (const k of ["clinicName", "clinicAddress", "doctorName", "doctorCreds"]) if (p[k] !== undefined) patch[k] = p[k];
+        setReportPrefs(patch);
+      } else if (action === "set_chat_model") {
+        const patch: any = {};
+        if (p.provider) patch.provider = p.provider;
+        if (p.geminiModel) patch.geminiModel = p.geminiModel;
+        setChatSettings(patch);
+      }
+      return reply;
+    } catch (e: any) {
+      return `${reply} (but I couldn't save it: ${e?.errors?.[0]?.message || e?.message || e})`;
+    }
+  }
+
   async function send() {
     const text = input.trim();
     if ((!text && !staged.length) || loading) return;
@@ -92,6 +128,22 @@ export function ChatBot() {
     if (!imgs.length && text) {
       const cmd = handleSettingsCommand(text);
       if (cmd) { setMessages((m) => [...m, { role: "assistant", text: cmd }]); return; }
+    }
+
+    const s0 = getChatSettings();
+    // Gemini-powered "configure by chat": profile / letterhead / model from natural language.
+    if (!imgs.length && text && s0.provider === "gemini" && SETTINGS_HINT.test(text)) {
+      setLoading(true);
+      try {
+        const res = await fetch("/api/assistant-action", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, geminiKey: s0.geminiKey, geminiModel: s0.geminiModel }) });
+        const act = await res.json();
+        const applied = await applyAction(act);
+        setMessages((m) => [...m, { role: "assistant", text: applied }]);
+      } catch (e: any) {
+        setMessages((m) => [...m, { role: "assistant", text: `Couldn't apply that: ${e?.message || e}` }]);
+      } finally { setLoading(false); }
+      return;
     }
 
     setLoading(true);
