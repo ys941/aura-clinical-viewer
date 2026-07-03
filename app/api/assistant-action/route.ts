@@ -8,7 +8,7 @@ const AGENT = `You are the settings agent for Aura, a medical-imaging web app. R
 Settings you can change:
 - profile: firstName, lastName, role (one of: Radiologist, Cardiologist, Ophthalmologist, Pathologist, Clinician, Resident, Technologist, Administrator), organization
 - letterhead (used on generated reports): clinicName, clinicAddress, doctorName, doctorCreds (qualifications / registration number)
-- chat_model: provider ("medgemma" or "gemini"), geminiModel
+- chat_model: provider ("medgemma", "gemini", or "groq"), geminiModel, groqModel
 
 Viewer controls (the image viewer). For these use action "viewer" with params {"command": <one below>, "value": <see>}:
 - command "window", value one of: soft | angio | lung | bone | brain   (window/level presets)
@@ -28,28 +28,44 @@ If it is NOT a settings/viewer request, use "action":"answer" and put a normal, 
 
 const ROLES = ["Radiologist", "Cardiologist", "Ophthalmologist", "Pathologist", "Clinician", "Resident", "Technologist", "Administrator"];
 
+async function agentJson(provider: string, message: string, body: any): Promise<{ text?: string; error?: string }> {
+  if (provider === "groq") {
+    const key = (String(body?.groqKey || "") || process.env.GROQ_API_KEY || "").trim();
+    const model = (String(body?.groqModel || "") || process.env.GROQ_MODEL || "llama-3.3-70b-versatile").trim();
+    if (!key) return { error: "no-key" };
+    const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(30000),
+      body: JSON.stringify({ model, temperature: 0.1, response_format: { type: "json_object" }, messages: [{ role: "system", content: AGENT }, { role: "user", content: message }] }),
+    });
+    if (!r.ok) return { error: `Groq ${r.status}: ${(await r.text().catch(() => "")).slice(0, 120)}` };
+    const d = await r.json();
+    return { text: d?.choices?.[0]?.message?.content || "" };
+  }
+  // gemini
+  const key = (String(body?.geminiKey || "") || process.env.GEMINI_API_KEY || "").trim();
+  const model = (String(body?.geminiModel || "") || process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
+  if (!key) return { error: "no-key" };
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${key}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
+    body: JSON.stringify({ systemInstruction: { parts: [{ text: AGENT }] }, contents: [{ role: "user", parts: [{ text: message }] }], generationConfig: { temperature: 0.1, responseMimeType: "application/json" } }),
+  });
+  if (!r.ok) return { error: `Gemini ${r.status}: ${(await r.text().catch(() => "")).slice(0, 120)}` };
+  const d = await r.json();
+  return { text: (d?.candidates?.[0]?.content?.parts || []).map((p: any) => p?.text || "").join("").trim() };
+}
+
 export async function POST(req: Request) {
   let body: any = {};
   try { body = await req.json(); } catch {}
   const message = String(body?.message || "").slice(0, 2000);
-  const key = (String(body?.geminiKey || "") || process.env.GEMINI_API_KEY || "").trim();
-  const model = (String(body?.geminiModel || "") || process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
+  const provider = String(body?.provider || "gemini").toLowerCase();
   if (!message) return NextResponse.json({ action: "answer", reply: "How can I help?" });
-  if (!key) return NextResponse.json({ action: "answer", reply: "Add a Gemini API key in Settings → AI Assistant (or say “my gemini key is AIza…”) so I can change settings for you by chat." });
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${key}`;
-    const r = await fetch(url, {
-      method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(30000),
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: AGENT }] },
-        contents: [{ role: "user", parts: [{ text: message }] }],
-        generationConfig: { temperature: 0.1, responseMimeType: "application/json" },
-      }),
-    });
-    if (!r.ok) { const t = await r.text().catch(() => ""); return NextResponse.json({ action: "answer", reply: `Gemini error ${r.status}. ${t.slice(0, 150)}` }); }
-    const data = await r.json();
-    const text = (data?.candidates?.[0]?.content?.parts || []).map((p: any) => p?.text || "").join("").trim();
+    const out = await agentJson(provider, message, body);
+    if (out.error === "no-key") return NextResponse.json({ action: "answer", reply: `Add a ${provider === "groq" ? "Groq" : "Gemini"} API key in Settings → AI Assistant so I can change settings for you by chat.` });
+    if (out.error) return NextResponse.json({ action: "answer", reply: out.error });
+    const text = (out.text || "").trim();
     let parsed: any = {};
     try { parsed = JSON.parse(text); } catch { return NextResponse.json({ action: "answer", reply: text || "Okay." }); }
 
@@ -63,8 +79,9 @@ export async function POST(req: Request) {
     } else if (action === "set_letterhead") {
       for (const k of ["clinicName", "clinicAddress", "doctorName", "doctorCreds"]) if (typeof p[k] === "string") params[k] = p[k].trim().slice(0, 160);
     } else if (action === "set_chat_model") {
-      if (p.provider === "gemini" || p.provider === "medgemma") params.provider = p.provider;
+      if (["gemini", "medgemma", "groq"].includes(p.provider)) params.provider = p.provider;
       if (typeof p.geminiModel === "string" && p.geminiModel.trim()) params.geminiModel = p.geminiModel.trim().slice(0, 60);
+      if (typeof p.groqModel === "string" && p.groqModel.trim()) params.groqModel = p.groqModel.trim().slice(0, 60);
     } else if (action === "viewer") {
       const cmds = ["window", "wheel", "overlays", "invert", "fullscreen", "reset", "navigate", "analyze", "report"];
       if (cmds.includes(p.command)) { params.command = p.command; if (typeof p.value === "string") params.value = p.value.trim().toLowerCase().slice(0, 20); }

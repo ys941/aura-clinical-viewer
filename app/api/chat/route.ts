@@ -59,8 +59,12 @@ export async function POST(req: Request) {
   const provider = String(body?.provider || process.env.AI_PROVIDER || "gemini").toLowerCase();
   const geminiKey = typeof body?.geminiKey === "string" ? body.geminiKey.trim() : "";
   const geminiModel = typeof body?.geminiModel === "string" ? body.geminiModel.trim() : "";
+  const groqKey = typeof body?.groqKey === "string" ? body.groqKey.trim() : "";
+  const groqModel = typeof body?.groqModel === "string" ? body.groqModel.trim() : "";
   try {
-    return provider === "gemini" ? await gemini(msgs, geminiKey, geminiModel) : await openai(msgs);
+    if (provider === "gemini") return await gemini(msgs, geminiKey, geminiModel);
+    if (provider === "groq") return await groq(msgs, groqKey, groqModel);
+    return await openai(msgs);
   } catch (e: any) {
     const raw = String(e?.message || e);
     const reply = /fetch failed|ECONNREFUSED|ENOTFOUND|terminated|network/i.test(raw)
@@ -105,6 +109,34 @@ async function openai(msgs: Msg[]) {
     if (!r.ok) { const t = await r.text().catch(() => ""); return NextResponse.json({ reply: `Model error ${r.status}. ${t.slice(0, 200)}` }); }
     const data = await r.json();
     return NextResponse.json({ reply: clean(data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "") || "(no response)" });
+  } finally { clearTimeout(timer); }
+}
+
+async function groq(msgs: Msg[], keyOverride = "", modelOverride = "") {
+  const key = keyOverride || process.env.GROQ_API_KEY?.trim() || "";
+  const model = modelOverride || process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile";
+  if (!key) return NextResponse.json({ reply: "No Groq API key set. Add it in Settings → AI Assistant (or say “my groq key is …”). Get a free key at console.groq.com/keys." });
+  const capped = capImages(msgs.slice(-8), 3);
+  const hasImages = capped.some((m) => (m.images || []).length);
+  const messages = [{ role: "system", content: SYSTEM }, ...capped.map((m) => {
+    const content: any[] = [{ type: "text", text: m.content || "" }];
+    for (const u of (m.images || [])) content.push({ type: "image_url", image_url: { url: u } });
+    return { role: m.role === "assistant" ? "assistant" : "user", content: (m.images && m.images.length) ? content : (m.content || "") };
+  })];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, signal: controller.signal,
+      body: JSON.stringify({ model, messages, max_tokens: 800, temperature: 0.3, stream: false }),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      const hint = hasImages && /vision|image|multimodal|not support/i.test(t) ? " (this Groq model has no vision — pick a vision model for images)" : "";
+      return NextResponse.json({ reply: `Groq error ${r.status}.${hint} ${t.slice(0, 160)}` });
+    }
+    const data = await r.json();
+    return NextResponse.json({ reply: clean(data?.choices?.[0]?.message?.content || "") || "(no response)" });
   } finally { clearTimeout(timer); }
 }
 

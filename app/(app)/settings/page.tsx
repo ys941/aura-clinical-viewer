@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Panel, SectionTitle } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { getChatSettings, setChatSettings, type ChatProvider } from "@/lib/chatSettings";
-import { User, Camera, Check, Loader2, IdCard, Building2, UserCog, Sparkles, KeyRound, Eye, EyeOff } from "lucide-react";
+import { User, Camera, Check, Loader2, IdCard, Building2, UserCog, Sparkles, KeyRound, Eye, EyeOff, RefreshCw } from "lucide-react";
 
 const ROLES = [
   "Radiologist",
@@ -36,15 +36,42 @@ export default function SettingsPage() {
   const [chatProvider, setChatProvider] = useState<ChatProvider>("medgemma");
   const [geminiKey, setGeminiKey] = useState("");
   const [geminiModel, setGeminiModel] = useState("gemini-2.5-flash");
+  const [groqKey, setGroqKey] = useState("");
+  const [groqModel, setGroqModel] = useState("llama-3.3-70b-versatile");
   const [showKey, setShowKey] = useState(false);
   const [chatSaved, setChatSaved] = useState(false);
+  const [geminiModels, setGeminiModels] = useState<string[]>([]);
+  const [groqModels, setGroqModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState<"" | "gemini" | "groq">("");
+  const [modelErr, setModelErr] = useState("");
 
   useEffect(() => {
     const s = getChatSettings();
     setChatProvider(s.provider); setGeminiKey(s.geminiKey); setGeminiModel(s.geminiModel);
+    setGroqKey(s.groqKey); setGroqModel(s.groqModel);
+    if (s.geminiKey) loadModels("gemini", s.geminiKey);
+    if (s.groqKey) loadModels("groq", s.groqKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function loadModels(provider: "gemini" | "groq", key: string) {
+    if (!key.trim()) { setModelErr("Enter the API key first, then load models."); return; }
+    setLoadingModels(provider); setModelErr("");
+    try {
+      const r = await fetch("/api/models", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key: key.trim() }) });
+      const d = await r.json();
+      if (provider === "gemini") setGeminiModels(d.models || []); else setGroqModels(d.models || []);
+      if (d.error) setModelErr(d.error);
+      else if (!(d.models || []).length) setModelErr("No models returned — check the key.");
+    } catch (e: any) { setModelErr(String(e?.message || e)); } finally { setLoadingModels(""); }
+  }
+
   function saveChat() {
-    setChatSettings({ provider: chatProvider, geminiKey: geminiKey.trim(), geminiModel: geminiModel.trim() || "gemini-2.5-flash" });
+    setChatSettings({
+      provider: chatProvider,
+      geminiKey: geminiKey.trim(), geminiModel: geminiModel.trim() || "gemini-2.5-flash",
+      groqKey: groqKey.trim(), groqModel: groqModel.trim() || "llama-3.3-70b-versatile",
+    });
     setChatSaved(true); setTimeout(() => setChatSaved(false), 2000);
   }
 
@@ -174,10 +201,11 @@ export default function SettingsPage() {
         <div className="space-y-4">
           <div>
             <span className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-slate-400"><Sparkles className="h-3.5 w-3.5" /> Chat model</span>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               {([
-                { id: "medgemma", name: "MedGemma (Colab)", desc: "Free medical vision model. Best for reading images." },
-                { id: "gemini", name: "Gemini", desc: "Great for text chat & every language. Needs a free key." },
+                { id: "medgemma", name: "MedGemma", desc: "Free medical vision (Colab). Best for images." },
+                { id: "gemini", name: "Gemini", desc: "Great chat, every language. Free key." },
+                { id: "groq", name: "Groq", desc: "Very fast. Llama & vision models. Free key." },
               ] as const).map((o) => (
                 <button key={o.id} onClick={() => setChatProvider(o.id)}
                   className={cn("rounded-xl border p-3 text-left transition", chatProvider === o.id ? "border-teal-500/50 bg-teal-500/10" : "border-white/10 bg-navy-850 hover:bg-white/5")}>
@@ -187,23 +215,24 @@ export default function SettingsPage() {
               ))}
             </div>
           </div>
+
           {chatProvider === "gemini" && (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Gemini API key" icon={KeyRound}>
-                <div className="relative">
-                  <input type={showKey ? "text" : "password"} value={geminiKey} onChange={(e) => setGeminiKey(e.target.value)} placeholder="AIza…" className={cn(inputCls, "pr-10 font-mono")} />
-                  <button onClick={() => setShowKey((v) => !v)} type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
-                </div>
-                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="mt-1 inline-block text-[11px] text-teal-300 hover:underline">Get a free key →</a>
-              </Field>
-              <Field label="Gemini model" icon={Sparkles}>
-                <input value={geminiModel} onChange={(e) => setGeminiModel(e.target.value)} placeholder="gemini-2.5-flash" className={inputCls} />
-              </Field>
-            </div>
+            <ProviderKeyModel
+              label="Gemini" keyValue={geminiKey} onKey={setGeminiKey} model={geminiModel} onModel={setGeminiModel}
+              models={geminiModels} loading={loadingModels === "gemini"} onLoad={() => loadModels("gemini", geminiKey)}
+              placeholder="AIza…" getKeyUrl="https://aistudio.google.com/apikey" showKey={showKey} setShowKey={setShowKey} />
           )}
+          {chatProvider === "groq" && (
+            <ProviderKeyModel
+              label="Groq" keyValue={groqKey} onKey={setGroqKey} model={groqModel} onModel={setGroqModel}
+              models={groqModels} loading={loadingModels === "groq"} onLoad={() => loadModels("groq", groqKey)}
+              placeholder="gsk_…" getKeyUrl="https://console.groq.com/keys" showKey={showKey} setShowKey={setShowKey} />
+          )}
+          {modelErr && <p className="text-xs text-amber-400">{modelErr}</p>}
+
           <div className="flex items-center gap-3">
             <button onClick={saveChat} className="btn-primary">{chatSaved ? <Check className="h-4 w-4" /> : null}{chatSaved ? "Saved" : "Save assistant settings"}</button>
-            <span className="text-xs text-slate-500">Stored only in this browser. You can also change this by chatting: “use gemini”, “my key is AIza…”.</span>
+            <span className="text-xs text-slate-500">Stored only in this browser. You can also say “use groq”, “my key is …”.</span>
           </div>
         </div>
       </Panel>
@@ -230,5 +259,37 @@ function Field({ label, icon: Icon, children }: { label: string; icon: any; chil
       </span>
       {children}
     </label>
+  );
+}
+
+function ProviderKeyModel({ label, keyValue, onKey, model, onModel, models, loading, onLoad, placeholder, getKeyUrl, showKey, setShowKey }: {
+  label: string; keyValue: string; onKey: (v: string) => void; model: string; onModel: (v: string) => void;
+  models: string[]; loading: boolean; onLoad: () => void; placeholder: string; getKeyUrl: string; showKey: boolean; setShowKey: (v: boolean) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <Field label={`${label} API key`} icon={KeyRound}>
+        <div className="relative">
+          <input type={showKey ? "text" : "password"} value={keyValue} onChange={(e) => onKey(e.target.value)} onBlur={onLoad} placeholder={placeholder} className={cn(inputCls, "pr-10 font-mono")} />
+          <button onClick={() => setShowKey(!showKey)} type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">{showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
+        </div>
+        <a href={getKeyUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-[11px] text-teal-300 hover:underline">Get a free key →</a>
+      </Field>
+      <Field label={`${label} model`} icon={Sparkles}>
+        <div className="flex gap-2">
+          {models.length ? (
+            <select value={model} onChange={(e) => onModel(e.target.value)} className={inputCls}>
+              {!models.includes(model) && <option value={model}>{model}</option>}
+              {models.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          ) : (
+            <input value={model} onChange={(e) => onModel(e.target.value)} placeholder="model name" className={inputCls} />
+          )}
+          <button onClick={onLoad} disabled={loading} type="button" title="Load models from the API" className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/10 bg-navy-850 text-slate-300 hover:bg-white/10 disabled:opacity-50">
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          </button>
+        </div>
+      </Field>
+    </div>
   );
 }

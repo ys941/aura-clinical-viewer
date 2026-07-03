@@ -16,14 +16,23 @@ const SETTINGS_HINT = /\b(set|change|update|make|rename|call me|my name|i am|i'?
 // Change assistant settings by chatting (text-only). Returns a reply, or null to fall through to the model.
 function handleSettingsCommand(text: string): string | null {
   const t = text.toLowerCase().trim();
-  const keyMatch = text.match(/AIza[\w-]{20,}/);
-  if (keyMatch && /(gemini|api\s*key|\bkey\b)/i.test(t)) {
-    setChatSettings({ geminiKey: keyMatch[0], provider: "gemini" });
+  const geminiKeyMatch = text.match(/AIza[\w-]{20,}/);
+  if (geminiKeyMatch && /(gemini|api\s*key|\bkey\b)/i.test(t)) {
+    setChatSettings({ geminiKey: geminiKeyMatch[0], provider: "gemini" });
     return "Saved your Gemini API key and switched me to Gemini. ✅ Ask me anything now.";
+  }
+  const groqKeyMatch = text.match(/gsk_[\w-]{20,}/);
+  if (groqKeyMatch) {
+    setChatSettings({ groqKey: groqKeyMatch[0], provider: "groq" });
+    return "Saved your Groq API key and switched me to Groq. ✅";
   }
   if (/\b(use|switch to|change to|set|talk in)\b.*\bgemini\b/.test(t) || t === "gemini") {
     const s = setChatSettings({ provider: "gemini" });
     return s.geminiKey ? "Switched to Gemini. ✅" : "Switched to Gemini — I still need a key. Paste it like “my gemini key is AIza…”, or add it in Settings → AI Assistant.";
+  }
+  if (/\b(use|switch to|change to|set)\b.*\bgroq\b/.test(t) || t === "groq") {
+    const s = setChatSettings({ provider: "groq" });
+    return s.groqKey ? "Switched to Groq. ✅" : "Switched to Groq — I still need a key. Paste it like “my groq key is gsk_…”, or add it in Settings → AI Assistant.";
   }
   if (/\b(use|switch to|change to|set)\b.*\b(medgemma|med gemma|colab)\b/.test(t) || t === "medgemma") {
     setChatSettings({ provider: "medgemma" });
@@ -134,12 +143,12 @@ export function ChatBot() {
     }
 
     const s0 = getChatSettings();
-    // Gemini-powered "configure by chat": profile / letterhead / model from natural language.
-    if (!imgs.length && text && s0.provider === "gemini" && SETTINGS_HINT.test(text)) {
+    // "Configure by chat": profile / letterhead / model / viewer from natural language (Gemini or Groq).
+    if (!imgs.length && text && (s0.provider === "gemini" || s0.provider === "groq") && SETTINGS_HINT.test(text)) {
       setLoading(true);
       try {
         const res = await fetch("/api/assistant-action", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, geminiKey: s0.geminiKey, geminiModel: s0.geminiModel }) });
+          body: JSON.stringify({ message: text, provider: s0.provider, geminiKey: s0.geminiKey, geminiModel: s0.geminiModel, groqKey: s0.groqKey, groqModel: s0.groqModel }) });
         const act = await res.json();
         const applied = await applyAction(act);
         setMessages((m) => [...m, { role: "assistant", text: applied }]);
@@ -156,7 +165,7 @@ export function ChatBot() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: history.map((m) => ({ role: m.role, content: m.text, images: m.images || [] })),
-          provider: s.provider, geminiKey: s.geminiKey, geminiModel: s.geminiModel,
+          provider: s.provider, geminiKey: s.geminiKey, geminiModel: s.geminiModel, groqKey: s.groqKey, groqModel: s.groqModel,
         }),
       });
       const data = await res.json();
