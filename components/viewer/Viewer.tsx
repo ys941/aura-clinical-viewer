@@ -766,7 +766,8 @@ export default function Viewer() {
   }
 
   // Analyze straight away (no upfront questions), then ask result-driven questions before the report.
-  function runAi() { if (!study || ai.loading) return; startAnalysis("study"); }
+  // Pinned images → analyze ONLY those (full-res). Nothing pinned → analyze the whole study.
+  function runAi() { if (!study || ai.loading) return; startAnalysis(aiPicks.length > 0 ? "selected" : "study"); }
   function runAiSelected() { if (!study || ai.loading || !aiPicks.length) return; setShowPicks(false); startAnalysis("selected"); }
 
   const post = (payload: any) => fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then((r) => r.json());
@@ -947,7 +948,9 @@ export default function Viewer() {
               </>)}
             </div>
           )}
-          <button onClick={runAi} disabled={ai.loading} title="Analyze the whole study" className="flex items-center gap-1.5 rounded-lg border border-teal-500/30 bg-teal-500/10 px-2 py-1.5 text-xs font-medium text-teal-300 hover:bg-teal-500/15 disabled:opacity-60">{ai.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}AI</button>
+          <button onClick={runAi} disabled={ai.loading} title={aiPicks.length > 0 ? `Analyze ${aiPicks.length} pinned image(s) at full resolution` : "Analyze the whole study"}
+            className={cn("flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-medium transition disabled:opacity-60", aiPicks.length > 0 ? "border-amber-500/40 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25" : "border-teal-500/30 bg-teal-500/10 text-teal-300 hover:bg-teal-500/15")}>
+            {ai.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}{aiPicks.length > 0 ? `Analyze ${aiPicks.length} pinned` : "AI"}</button>
           <button onClick={() => openReport()} className="flex items-center gap-1.5 rounded-lg bg-medical-600 px-2 py-1.5 text-xs font-medium text-white hover:bg-medical-500"><FileText className="h-3.5 w-3.5" />Report</button>
         </div>
       </div>
