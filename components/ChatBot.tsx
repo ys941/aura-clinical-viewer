@@ -102,20 +102,23 @@ export function ChatBot() {
   const recRef = useRef<any>(null);
   const finalRef = useRef("");
   const baseRef = useRef("");
+  const handsFreeRef = useRef(false);
+  const silenceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sendRef = useRef<() => void>(() => {});
+  useEffect(() => { sendRef.current = () => send(); });
 
   useEffect(() => { setMicOk(typeof window !== "undefined" && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)); }, []);
-  useEffect(() => () => { try { recRef.current?.stop(); } catch {} }, []);
+  useEffect(() => () => { handsFreeRef.current = false; if (silenceRef.current) clearTimeout(silenceRef.current); try { recRef.current?.stop(); } catch {} }, []);
 
-  function toggleMic() {
-    if (listening) { try { recRef.current?.stop(); } catch {} return; }
+  // Hands-free voice: one click keeps listening across pauses; auto-sends each spoken phrase.
+  function startRec() {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) return;
     const rec = new SR();
     rec.lang = navigator.language || "en-US";
     rec.interimResults = true;
     rec.continuous = true;
-    baseRef.current = input ? input + " " : "";
-    finalRef.current = "";
+    finalRef.current = ""; baseRef.current = input ? input + " " : "";
     rec.onstart = () => setListening(true);
     rec.onresult = (e: any) => {
       let interim = "";
@@ -124,11 +127,26 @@ export function ChatBot() {
         if (e.results[i].isFinal) finalRef.current += t + " "; else interim += t;
       }
       setInput((baseRef.current + finalRef.current + interim).replace(/\s+/g, " ").trimStart());
+      if (silenceRef.current) clearTimeout(silenceRef.current);
+      silenceRef.current = setTimeout(() => {
+        if (finalRef.current.trim()) { sendRef.current(); finalRef.current = ""; baseRef.current = ""; }
+      }, 1400);
     };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
+    rec.onerror = () => {};
+    rec.onend = () => { if (handsFreeRef.current) setTimeout(() => { try { startRec(); } catch {} }, 200); else setListening(false); };
     recRef.current = rec;
     try { rec.start(); } catch {}
+  }
+  function toggleMic() {
+    if (listening || handsFreeRef.current) {
+      handsFreeRef.current = false;
+      if (silenceRef.current) clearTimeout(silenceRef.current);
+      try { recRef.current?.stop(); } catch {}
+      setListening(false);
+      return;
+    }
+    handsFreeRef.current = true;
+    startRec();
   }
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages, loading, open]);
@@ -191,7 +209,7 @@ export function ChatBot() {
   }
 
   async function send() {
-    try { recRef.current?.stop(); } catch {}
+    if (!handsFreeRef.current) { try { recRef.current?.stop(); } catch {} }
     const text = input.trim();
     if ((!text && !staged.length) || loading) return;
     let imgs = staged;
@@ -314,7 +332,7 @@ export function ChatBot() {
               rows={1} placeholder="Ask about the image…"
               className="max-h-24 flex-1 resize-none rounded-lg border border-white/10 bg-navy-850 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50" />
             {micOk && (
-              <button onClick={toggleMic} title={listening ? "Stop dictation" : "Speak"} className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg border transition", listening ? "border-rose-500/40 bg-rose-500/20 text-rose-300 animate-pulse" : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10")}><Mic className="h-4 w-4" /></button>
+              <button onClick={toggleMic} title={listening ? "Listening — click to stop" : "Hands-free voice: click once, speak your commands"} className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg border transition", listening ? "border-rose-500/40 bg-rose-500/20 text-rose-300 animate-pulse" : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10")}><Mic className="h-4 w-4" /></button>
             )}
             <button onClick={send} disabled={loading || (!input.trim() && !staged.length)} title="Send" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-teal-600 text-white transition hover:bg-teal-500 disabled:opacity-50"><Send className="h-4 w-4" /></button>
           </div>
