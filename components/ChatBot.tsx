@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useUser } from "@clerk/nextjs";
-import { X, Send, ImagePlus, Loader2, Trash2, Monitor } from "lucide-react";
+import { X, Send, ImagePlus, Loader2, Trash2, Monitor, Mic } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { getChatSettings, setChatSettings } from "@/lib/chatSettings";
 import { setReportPrefs } from "@/lib/reportPrefs";
@@ -95,8 +95,41 @@ export function ChatBot() {
   const [loading, setLoading] = useState(false);
   const [drag, setDrag] = useState(false);
   const [agentReady, setAgentReady] = useState(false); // a Gemini/Groq key exists server-side → config-by-chat works
+  const [listening, setListening] = useState(false);
+  const [micOk, setMicOk] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const recRef = useRef<any>(null);
+  const finalRef = useRef("");
+  const baseRef = useRef("");
+
+  useEffect(() => { setMicOk(typeof window !== "undefined" && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)); }, []);
+  useEffect(() => () => { try { recRef.current?.stop(); } catch {} }, []);
+
+  function toggleMic() {
+    if (listening) { try { recRef.current?.stop(); } catch {} return; }
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+    const rec = new SR();
+    rec.lang = navigator.language || "en-US";
+    rec.interimResults = true;
+    rec.continuous = true;
+    baseRef.current = input ? input + " " : "";
+    finalRef.current = "";
+    rec.onstart = () => setListening(true);
+    rec.onresult = (e: any) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalRef.current += t + " "; else interim += t;
+      }
+      setInput((baseRef.current + finalRef.current + interim).replace(/\s+/g, " ").trimStart());
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => setListening(false);
+    recRef.current = rec;
+    try { rec.start(); } catch {}
+  }
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages, loading, open]);
   useEffect(() => { fetch("/api/settings-keys").then((r) => r.json()).then((d) => setAgentReady(!!d?.gemini || !!d?.groq)).catch(() => {}); }, [open]);
@@ -158,6 +191,7 @@ export function ChatBot() {
   }
 
   async function send() {
+    try { recRef.current?.stop(); } catch {}
     const text = input.trim();
     if ((!text && !staged.length) || loading) return;
     let imgs = staged;
@@ -279,6 +313,9 @@ export function ChatBot() {
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
               rows={1} placeholder="Ask about the image…"
               className="max-h-24 flex-1 resize-none rounded-lg border border-white/10 bg-navy-850 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50" />
+            {micOk && (
+              <button onClick={toggleMic} title={listening ? "Stop dictation" : "Speak"} className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg border transition", listening ? "border-rose-500/40 bg-rose-500/20 text-rose-300 animate-pulse" : "border-white/10 bg-white/5 text-slate-300 hover:bg-white/10")}><Mic className="h-4 w-4" /></button>
+            )}
             <button onClick={send} disabled={loading || (!input.trim() && !staged.length)} title="Send" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-teal-600 text-white transition hover:bg-teal-500 disabled:opacity-50"><Send className="h-4 w-4" /></button>
           </div>
         </div>

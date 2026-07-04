@@ -85,7 +85,7 @@ Scroll to any slice and hit **Pin** (or press **`P`**) — across **any films/se
 No generic questions up front. It **reads first**, then asks the **clinical questions its findings actually raised** (smoking history? prior malignancy? symptom duration?) — fully skippable. Your answers trigger a **full‑resolution re‑analysis of the key slices** → a sharper final report.
 
 ### 💬 Aura Assistant — the floating Siri orb
-A glowing animated orb bottom‑right. **Drop, paste, or upload** any medical image and **chat** about it in **any language** (it mirrors yours). Multi‑turn, image‑aware. Pick its brain in **Settings → AI Assistant**: **MedGemma**, **Gemini**, or **Groq** (model lists are pulled live from each provider; keys stay in your browser). And it can **drive the app for you** — see below.
+A glowing animated orb bottom‑right. **Drop, paste, or upload** any medical image and **chat** about it in **any language** (it mirrors yours) — or **🎤 talk to it** (built‑in voice‑to‑text). Multi‑turn, image‑aware. Pick its brain in **Settings → AI Assistant**: **MedGemma**, **Gemini**, or **Groq** (model lists are pulled live from each provider). And it can **drive the app for you** — see below.
 
 ### 📋 A report that looks like a real radiology report
 After analysis the **editable report opens itself** — a formal **letterhead layout** (your centre + reporting doctor, remembered on your device), patient table, exam title, **Clinical History → Findings → Impression → Advice → Key Images gallery**, signature block, and "electronically verified." Export a styled standalone **`report.html`** with a built‑in **🖨 Print / Save PDF** button. Format follows the **ACR / RSNA** structured‑reporting standard.
