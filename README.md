@@ -361,3 +361,25 @@ public/cornerstone/     ← WADO web-worker bundle · gif.worker.js
 <sub>build cool things · stay curious · touch grass occasionally 🌱</sub>
 
 </div>
+
+## 📄 Licence
+
+Released under the **[MIT Licence with Attribution Requirement](LICENSE)** — use it,
+fork it, rebrand it, sell what you build with it.
+
+### ⭐ One condition: attribution
+
+Credit to the original author stays visible:
+
+- the app footer credits **[@ys941](https://github.com/ys941)**, and
+- the server will not start until you set `ATTRIBUTION_ACK="https://github.com/ys941"`
+  in your environment — nothing is transmitted, both checks are local.
+
+See [`lib/attribution.server.ts`](lib/attribution.server.ts) and [COPYRIGHT.md](COPYRIGHT.md).
+
+### ⚕️ Not a medical device
+
+Aura is a **research and demonstration prototype**. It is not cleared or approved by any
+regulator and is **not intended for primary diagnosis or treatment decisions**. Any
+AI-generated output is **decision support only** and must be verified by a qualified
+clinician.

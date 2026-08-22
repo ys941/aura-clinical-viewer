@@ -1,0 +1,59 @@
+name: 🐛 Bug report
+description: Something behaves differently than you expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. You don't need to fill in every box —
+        even a half-complete report is more useful than a missing one.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead?
+      placeholder: A multi-frame series opened with the slices out of order.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can it be reproduced?
+      description: Rough steps are fine. "I'm not sure, it just happens sometimes" is also a valid answer.
+      placeholder: |
+        1. Go to …
+        2. Click …
+        3. Wait for the next cycle
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the app?
+      options:
+        - Opening a study (DICOM, ZIP, image)
+        - The viewer (window/level, zoom, pan, cine)
+        - Measurements and annotations
+        - Series handling / thumbnails
+        - AI analysis
+        - Report generation or export
+        - Setup or install
+        - Not sure
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Any logs or errors?
+      description: Paste anything relevant. It will be formatted automatically.
+      render: shell
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **Never attach a real patient study or a screenshot containing patient details.** Use anonymised or synthetic data only.
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: Node 20, Chrome, running locally

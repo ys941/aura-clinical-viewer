@@ -1,0 +1,75 @@
+/**
+ * Generates the GitHub social preview card (1280x640 PNG).
+ *
+ * GitHub shows this image whenever the repo is linked on X, Reddit, Slack,
+ * Discord or Hacker News. Without it, shares render a generic grey card.
+ *
+ * Upload the result at: Settings → General → Social preview
+ *
+ *   node scripts/make-social-preview.mjs
+ */
+import sharp from "sharp";
+import { writeFileSync } from "node:fs";
+
+const W = 1280;
+const H = 640;
+const SANS = "Segoe UI, Helvetica Neue, Arial, sans-serif";
+const MONO = "Consolas, Menlo, monospace";
+
+const FEATURES = [
+  ["Opens", "DICOM, ZIP, JPEG, TIFF"],
+  ["Measures", "length, angle, ROI, probe"],
+  ["Analyses", "every series, not one slice"],
+  ["Reports", "structured, with key image"],
+];
+
+const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0D1117"/>
+      <stop offset="55%" stop-color="#12182A"/>
+      <stop offset="100%" stop-color="#07202B"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2DD4BF"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="${W}" height="${H}" fill="url(#bg)"/>
+  <rect width="${W}" height="6" fill="url(#accent)"/>
+
+  <!-- title -->
+  <text x="72" y="150" font-family="${SANS}" font-size="72" font-weight="700" fill="#FFFFFF">Aura</text>
+
+  <!-- tagline -->
+  <text x="72" y="212" font-family="${SANS}" font-size="31" fill="#C9D1D9">
+    A universal medical-imaging workstation in your browser.
+  </text>
+  <text x="72" y="256" font-family="${SANS}" font-size="31" fill="#C9D1D9">
+    One viewer for every scan. <tspan fill="#2DD4BF" font-weight="600">No database. Nothing kept.</tspan>
+  </text>
+
+  <!-- feature row -->
+  ${FEATURES.map((f, i) => {
+    const x = 72 + i * 288;
+    return `<rect x="${x}" y="318" width="264" height="96" rx="10" fill="#FFFFFF" fill-opacity="0.045" stroke="#2DD4BF" stroke-opacity="0.32"/>
+    <text x="${x + 22}" y="356" font-family="${SANS}" font-size="23" font-weight="700" fill="#2DD4BF">${f[0]}</text>
+    <text x="${x + 22}" y="386" font-family="${SANS}" font-size="17" fill="#8B949E">${f[1]}</text>`;
+  }).join("\n  ")}
+
+  <!-- stack line -->
+  <text x="72" y="486" font-family="${MONO}" font-size="20" fill="#7D8590">
+    Next.js  ·  TypeScript  ·  Cornerstone.js  ·  MedGemma  ·  self-hosted  ·  MIT
+  </text>
+
+  <!-- footer -->
+  <line x1="72" y1="530" x2="${W - 72}" y2="530" stroke="#30363D"/>
+  <text x="72" y="576" font-family="${MONO}" font-size="23" fill="#E6EDF3">github.com/ys941/aura-clinical-viewer</text>
+  <text x="${W - 72}" y="576" font-family="${SANS}" font-size="21" fill="#7D8590" text-anchor="end">research prototype - not a medical device</text>
+</svg>`;
+
+writeFileSync("scripts/social-preview.svg", svg);
+
+await sharp(Buffer.from(svg)).png().toFile("scripts/social-preview.png");
+console.log("wrote scripts/social-preview.png (1280x640)");

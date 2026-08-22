@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0D1117"/>
+      <stop offset="55%" stop-color="#12182A"/>
+      <stop offset="100%" stop-color="#07202B"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2DD4BF"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="6" fill="url(#accent)"/>
+
+  <!-- title -->
+  <text x="72" y="150" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="72" font-weight="700" fill="#FFFFFF">Aura</text>
+
+  <!-- tagline -->
+  <text x="72" y="212" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="31" fill="#C9D1D9">
+    A universal medical-imaging workstation in your browser.
+  </text>
+  <text x="72" y="256" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="31" fill="#C9D1D9">
+    One viewer for every scan. <tspan fill="#2DD4BF" font-weight="600">No database. Nothing kept.</tspan>
+  </text>
+
+  <!-- feature row -->
+  <rect x="72" y="318" width="264" height="96" rx="10" fill="#FFFFFF" fill-opacity="0.045" stroke="#2DD4BF" stroke-opacity="0.32"/>
+    <text x="94" y="356" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="23" font-weight="700" fill="#2DD4BF">Opens</text>
+    <text x="94" y="386" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="17" fill="#8B949E">DICOM, ZIP, JPEG, TIFF</text>
+  <rect x="360" y="318" width="264" height="96" rx="10" fill="#FFFFFF" fill-opacity="0.045" stroke="#2DD4BF" stroke-opacity="0.32"/>
+    <text x="382" y="356" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="23" font-weight="700" fill="#2DD4BF">Measures</text>
+    <text x="382" y="386" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="17" fill="#8B949E">length, angle, ROI, probe</text>
+  <rect x="648" y="318" width="264" height="96" rx="10" fill="#FFFFFF" fill-opacity="0.045" stroke="#2DD4BF" stroke-opacity="0.32"/>
+    <text x="670" y="356" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="23" font-weight="700" fill="#2DD4BF">Analyses</text>
+    <text x="670" y="386" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="17" fill="#8B949E">every series, not one slice</text>
+  <rect x="936" y="318" width="264" height="96" rx="10" fill="#FFFFFF" fill-opacity="0.045" stroke="#2DD4BF" stroke-opacity="0.32"/>
+    <text x="958" y="356" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="23" font-weight="700" fill="#2DD4BF">Reports</text>
+    <text x="958" y="386" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="17" fill="#8B949E">structured, with key image</text>
+
+  <!-- stack line -->
+  <text x="72" y="486" font-family="Consolas, Menlo, monospace" font-size="20" fill="#7D8590">
+    Next.js  ·  TypeScript  ·  Cornerstone.js  ·  MedGemma  ·  self-hosted  ·  MIT
+  </text>
+
+  <!-- footer -->
+  <line x1="72" y1="530" x2="1208" y2="530" stroke="#30363D"/>
+  <text x="72" y="576" font-family="Consolas, Menlo, monospace" font-size="23" fill="#E6EDF3">github.com/ys941/aura-clinical-viewer</text>
+  <text x="1208" y="576" font-family="Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="21" fill="#7D8590" text-anchor="end">research prototype - not a medical device</text>
+</svg>

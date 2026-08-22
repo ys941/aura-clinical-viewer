@@ -1,0 +1,41 @@
+name: 💡 Idea or feature request
+description: Something you wish this did.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome even if they're half-formed. If you'd rather think out
+        loud first, [start a discussion](https://github.com/ys941/aura-clinical-viewer/discussions) instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the annoyance?
+      description: Describe the problem rather than the solution — it often leads somewhere better.
+      placeholder: I can't tell which series I'm looking at when a study has ten of them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like it to do?
+      placeholder: A persistent series label in the corner of the viewport.
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      description: Aura is a research prototype, not a diagnostic tool.
+      options:
+        - label: My idea does not present AI output as a diagnosis or remove a safety caveat
+          required: false
+
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Would you like to build it?
+      options:
+        - label: I'd be up for trying this myself (help and review very much available)
+          required: false
