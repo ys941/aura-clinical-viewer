@@ -2,7 +2,7 @@
  * instrumentation.ts
  *
  * Next.js instrumentation hook — runs ONCE when the server starts.
- * Enforces the attribution requirement (LICENSE clause 2).
+ * Enforces the attribution requirement (see COPYRIGHT.md).
  *
  * Docs: https://nextjs.org/docs/app/building-your-application/optimizing/instrumentation
  */

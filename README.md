@@ -364,7 +364,7 @@ public/cornerstone/     ← WADO web-worker bundle · gif.worker.js
 
 ## 📄 Licence
 
-Released under the **[MIT Licence with Attribution Requirement](LICENSE)** — use it,
+Released under the **[MIT Licence](LICENSE)** — use it,
 fork it, rebrand it, sell what you build with it.
 
 ### ⭐ One condition: attribution
