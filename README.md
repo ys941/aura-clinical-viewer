@@ -346,6 +346,13 @@ public/cornerstone/     ← WADO web-worker bundle · gif.worker.js
 
 ---
 
+## ⭐ Star the repo
+
+If Aura earned a place in your workflow, drop a star. There's no marketing
+behind this project — a star is genuinely how the next person finds it.
+
+---
+
 ## 📄 License & the "please don't sue us" disclaimer
 
 [MIT](LICENSE) © 2026 — with a medical‑use disclaimer in the license file.
