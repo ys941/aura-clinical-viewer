@@ -25,3 +25,6 @@ next-env.d.ts
 
 # local tooling / dev-server config
 .claude/
+# Windows folder-icon cosmetics - local only, not part of the project
+desktop.ini
+folder-icon.ico

@@ -40,24 +40,37 @@ if not exist "node_modules" (
 REM 3) Open the app shortly after the server starts
 start "" /b cmd /c "timeout /t 6 /nobreak >nul & start http://localhost:4477/viewer"
 
-if "%MODE%"=="prod" (
-  echo Building optimized production bundle...
-  call npm run build
-  if errorlevel 1 (
-    echo.
-    echo Build FAILED. Fix the errors above and try again.
-    pause
-    exit /b 1
-  )
+REM goto/label style below (not a nested "if (...) else (...)" block): cmd.exe's
+REM block parser breaks on ANY literal "(" or ")" found inside a parenthesized
+REM block, even a matched pair in plain echo text. This file used to have
+REM "(close this window to stop everything)" inside such a block on both
+REM branches - reproduced: cmd silently swallowed the closing ")" from the
+REM printed text and mis-tracked the block boundary. Restructuring avoids the
+REM trap outright instead of relying on escaping every paren correctly forever.
+if /I "%MODE%"=="prod" goto MODE_PROD
+goto MODE_DEV
+
+:MODE_PROD
+echo Building optimized production bundle...
+call npm run build
+if errorlevel 1 (
   echo.
-  echo Starting production server... (close this window to stop everything)
-  echo.
-  call npm run start:local
-) else (
-  echo Starting the app in dev mode... (close this window to stop everything)
-  echo.
-  call npm run dev
+  echo Build FAILED. Fix the errors above and try again.
+  pause
+  exit /b 1
 )
+echo.
+echo Starting production server - close this window to stop everything.
+echo.
+call npm run start:local
+goto MODE_DONE
+
+:MODE_DEV
+echo Starting the app in dev mode - close this window to stop everything.
+echo.
+call npm run dev
+
+:MODE_DONE
 
 echo.
 echo Server stopped. Press any key to close.
