@@ -177,7 +177,7 @@ Aura is a standard Next.js app — deploys to both in a couple of clicks. Set th
 
 </div>
 
-> The buttons work for **you** (the repo owner) since the repo is private — you'll be asked to sign in / grant access and to enter the env vars.
+> Either button clones this repo into your own account — you'll be asked to sign in and to enter the env vars before the first build.
 
 ### ▲ Vercel
 1. Click **Deploy with Vercel** above (or **Import** at [vercel.com/new](https://vercel.com/new) — auto‑detects Next.js).
