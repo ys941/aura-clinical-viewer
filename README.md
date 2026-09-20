@@ -17,6 +17,14 @@ Open *any* scan, poke it with real PACS tools, let AI read the **whole study** i
 ![License](https://img.shields.io/badge/License-MIT-3fb950.svg)
 [![CI](https://github.com/ys941/aura-clinical-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/ys941/aura-clinical-viewer/actions/workflows/ci.yml)
 
+[![Live demo](https://img.shields.io/badge/%E2%96%B6%20Open%20the%20viewer-Live%20demo-0d9488?style=for-the-badge)](https://ys941.github.io/aura-clinical-viewer/)
+
+**[▶ Open the live demo](https://ys941.github.io/aura-clinical-viewer/)** — a study loads in one click, and nothing is uploaded anywhere.
+
+[![Aura viewing a CT study — window presets, DICOM tags and measurements](docs/screenshots/viewer.png)](https://ys941.github.io/aura-clinical-viewer/)
+
+<sub>The demo is the real viewer, running entirely in your browser. It opens a <b>synthetic CT phantom</b> — generated, not anyone's scan — or drop in your own DICOM. AI analysis is the one thing switched off there: it needs a server and a model of your own.</sub>
+
 </div>
 
 ---
