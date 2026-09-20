@@ -15,6 +15,7 @@ Open *any* scan, poke it with real PACS tools, let AI read the **whole study** i
 ![Clerk](https://img.shields.io/badge/Auth-Clerk-6C47FF?logo=clerk&logoColor=white)
 ![MedGemma](https://img.shields.io/badge/AI-MedGemma%201.5%20(vision)-0d9488)
 ![License](https://img.shields.io/badge/License-MIT-3fb950.svg)
+[![CI](https://github.com/ys941/aura-clinical-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/ys941/aura-clinical-viewer/actions/workflows/ci.yml)
 
 </div>
 
