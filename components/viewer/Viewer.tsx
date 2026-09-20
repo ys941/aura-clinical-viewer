@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { initCornerstone, type CornerstoneApi } from "@/lib/cornerstoneSetup";
+import { asset } from "@/lib/asset";
+import { IS_DEMO } from "@/lib/auth-mode";
 import { loadStudy, readImageTags, type LoadedStudy, type LoadedSeries } from "@/lib/loadStudy";
 import { Dropzone } from "@/components/Dropzone";
 import { cn } from "@/lib/cn";
@@ -520,6 +522,18 @@ export default function Viewer() {
     return () => { try { delete (window as any).__auraCaptureViewer; } catch {} };
   }, []);
 
+  // The demo ships a generated study so there is something to open.
+  async function loadSampleStudy() {
+    try {
+      const res = await fetch(asset("/demo/sample-ct-phantom.zip"));
+      if (!res.ok) throw new Error(`${res.status}`);
+      const blob = await res.blob();
+      await onFiles([new File([blob], "sample-ct-phantom.zip", { type: "application/zip" })]);
+    } catch (e: any) {
+      setError(`Couldn't load the sample study: ${e?.message || e}`);
+    }
+  }
+
   async function onFiles(files: File[]) {
     if (!apiRef.current) return;
     setBusy(true); setError(null); setAi({ loading: false }); setThumbs({}); imgTagCache.current.clear(); stopCine(); setProgress({ done: 0, total: 0, phase: "Reading" });
@@ -610,7 +624,7 @@ export default function Viewer() {
       api.cornerstone.enable(off);
       const mainVp = api.cornerstone.getViewport(main);
       let gif: any = null, zip: any = null;
-      if (format === "gif") gif = new (await import("gif.js")).default({ workers: 2, quality: 10, workerScript: "/gif.worker.js", width: 512, height: 512 });
+      if (format === "gif") gif = new (await import("gif.js")).default({ workers: 2, quality: 10, workerScript: asset("/gif.worker.js"), width: 512, height: 512 });
       else zip = new (await import("jszip")).default();
       let k = 0;
       for (let i = lo; i <= hi; i += stepN, k++) {
@@ -836,6 +850,10 @@ export default function Viewer() {
   // Phase 1 — read the images and produce a PRELIMINARY report + result-driven questions.
   async function startAnalysis(mode: "study" | "selected") {
     if (!study) return;
+    if (IS_DEMO) {
+      setAi({ loading: false, connected: false, message: "AI analysis runs on your own server with your own model — it is switched off in this browser-only demo. Everything else here is the real viewer." });
+      return;
+    }
     const selected = mode === "selected" && aiPicks.length > 0;
     setReportHistory(""); pendingRef.current = null;
     setAi({ loading: true }); setAiProgress({ done: 0, total: 1, phase: "Preparing" });
@@ -944,6 +962,17 @@ export default function Viewer() {
         <Dropzone accept={ACCEPT} onFiles={onFiles} busy={busy || !ready}
           title={ready ? "Drop a file, folder ZIP, or browse" : "Loading imaging engine…"}
           hint="DICOM · PACS · CT · MRI · CTCA · CAG · Echo · X-Ray · OCT · Fundus · Histopathology · PNG/JPG/TIFF · ZIP (multi-series)" />
+        {IS_DEMO && (
+          <div className="mt-4 text-center">
+            <button onClick={loadSampleStudy} disabled={busy || !ready}
+              className="rounded-xl border border-teal-500/30 bg-teal-500/10 px-4 py-2 text-sm font-medium text-teal-300 transition hover:bg-teal-500/20 disabled:opacity-60">
+              Load the sample study
+            </button>
+            <p className="mt-2 text-[11px] text-slate-500">
+              16 CT slices of a <b>synthetic phantom</b> — generated, not a real patient. Scroll, window, measure and export it like any study.
+            </p>
+          </div>
+        )}
         {progress && progress.total > 0 && (
           <div className="mx-auto mt-4 max-w-md">
             <div className="mb-1 flex justify-between text-[11px] text-slate-400"><span>{progress.phase}…</span><span>{progress.done} / {progress.total}</span></div>

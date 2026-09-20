@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useUser } from "@clerk/nextjs";
+import { useOptionalUser } from "@/lib/use-optional-user";
 import { X, Send, ImagePlus, Loader2, Trash2, Monitor, Mic } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { getChatSettings, setChatSettings } from "@/lib/chatSettings";
@@ -87,7 +87,7 @@ function captureViewer(): string | null { try { return (window as any).__auraCap
 const REFERS_TO_VIEW = /\b(what('?s| is| do you| are you)?\s*(you\s*)?(see|seeing|showing)|what is this|what'?s this|this (image|slice|scan|x-?ray|film|ct|mri|study)|current (image|slice|view)|on[- ]?screen|read (this|it)|describe (this|it)|diagnos)/i;
 
 export function ChatBot() {
-  const { user } = useUser();
+  const { user } = useOptionalUser();
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");

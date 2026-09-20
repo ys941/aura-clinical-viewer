@@ -4,6 +4,8 @@
 // Renders DICOM (via WADO image loader) and standard images (via a small
 // custom color loader) through ONE engine, so the same toolset works for all.
 
+import { asset } from "@/lib/asset";
+
 type CS = typeof import("cornerstone-core");
 
 let initialized = false;
@@ -97,7 +99,7 @@ export async function initCornerstone(): Promise<CornerstoneApi> {
     wado.webWorkerManager.initialize({
       maxWebWorkers: Math.max(1, (navigator.hardwareConcurrency || 2) - 1),
       startWebWorkersOnDemand: true,
-      webWorkerPath: "/cornerstone/index.worker.bundle.min.worker.js",
+      webWorkerPath: asset("/cornerstone/index.worker.bundle.min.worker.js"),
       taskConfiguration: {
         decodeTask: { initializeCodecsOnStartup: false, strict: false },
       },

@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { BRAND } from "@/lib/brand";
 import { ClerkProvider } from "@clerk/nextjs";
+import { AUTH_ENABLED } from "@/lib/auth-mode";
 import { dark } from "@clerk/themes";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -17,6 +18,15 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const shell = (
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <body className={`${inter.variable} font-sans`} suppressHydrationWarning>{children}</body>
+    </html>
+  );
+
+  // No Clerk key configured — run open (local single-user install, or the demo).
+  if (!AUTH_ENABLED) return shell;
+
   return (
     <ClerkProvider
       appearance={{
@@ -39,9 +49,7 @@ export default function RootLayout({
         },
       }}
     >
-      <html lang="en" className="dark" suppressHydrationWarning>
-        <body className={`${inter.variable} font-sans`} suppressHydrationWarning>{children}</body>
-      </html>
+      {shell}
     </ClerkProvider>
   );
 }

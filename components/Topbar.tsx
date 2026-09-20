@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { UserButton, useUser } from "@clerk/nextjs";
+import { UserButton } from "@clerk/nextjs";
+import { AUTH_ENABLED } from "@/lib/auth-mode";
+import { useOptionalUser } from "@/lib/use-optional-user";
 import {
   Search,
   Bell,
@@ -16,7 +18,7 @@ export function Topbar() {
   const [showAi, setShowAi] = useState(false);
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-  const { user } = useUser();
+  const { user } = useOptionalUser();
 
   const displayName = user?.fullName || user?.primaryEmailAddress?.emailAddress || "Account";
 
@@ -87,7 +89,7 @@ export function Topbar() {
             </div>
             <div className="text-[11px] text-slate-500">Clinician</div>
           </div>
-          {mounted ? (
+          {mounted && AUTH_ENABLED ? (
             <UserButton
               afterSignOutUrl="/login"
               appearance={{ elements: { avatarBox: "h-8 w-8" } }}

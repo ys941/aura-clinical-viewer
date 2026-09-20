@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useUser, UserProfile } from "@clerk/nextjs";
+import { UserProfile } from "@clerk/nextjs";
+import { AUTH_ENABLED } from "@/lib/auth-mode";
+import { useOptionalUser } from "@/lib/use-optional-user";
 import { PageHeader } from "@/components/PageHeader";
 import { Panel, SectionTitle } from "@/components/ui";
 import { cn } from "@/lib/cn";
@@ -20,7 +22,7 @@ const ROLES = [
 ];
 
 export default function SettingsPage() {
-  const { user, isLoaded } = useUser();
+  const { user, isLoaded } = useOptionalUser();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [firstName, setFirstName] = useState("");
@@ -261,12 +263,14 @@ export default function SettingsPage() {
       </Panel>
 
       {/* Full account management via Clerk */}
+      {AUTH_ENABLED && (
       <Panel>
         <SectionTitle title="Account & Security" subtitle="Email, password, connected accounts, sessions & devices" />
         <div className="overflow-hidden rounded-xl">
           <UserProfile routing="hash" appearance={{ elements: { rootBox: "w-full", card: "shadow-none bg-transparent" } }} />
         </div>
       </Panel>
+      )}
     </div>
   );
 }

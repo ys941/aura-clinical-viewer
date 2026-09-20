@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev -p 4477",
     "build": "next build",
+    "build:demo": "node scripts/build-demo.mjs",
     "start": "next start",
     "start:local": "next start -p 4477",
     "lint": "next lint"

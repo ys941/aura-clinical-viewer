@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Cpu, RefreshCw, X, ExternalLink } from "lucide-react";
 
+import { IS_DEMO } from "@/lib/auth-mode";
+
 type Status = "live" | "waking" | "offline" | "no-endpoint" | "no-key" | "checking";
 
 type Health = {
@@ -28,6 +30,9 @@ const THEME: Record<Status, { dot: string; ring: string; pill: string; text: str
 };
 
 export function MedGemmaHealth() {
+  // The demo is viewer-only: there is no server to ask.
+  if (IS_DEMO) return null;
+
   const [health, setHealth] = useState<Health>({ ok: false, status: "checking", name: "MedGemma" });
   const [open, setOpen] = useState(false);
   const [checkedAt, setCheckedAt] = useState<number | null>(null);
