@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { UserProfile } from "@clerk/nextjs";
 import { AUTH_ENABLED } from "@/lib/auth-mode";
 import { useOptionalUser } from "@/lib/use-optional-user";
+import { DEFAULT_GROQ_MODEL, resolveGroqModel } from "@/lib/groqModels";
 import { PageHeader } from "@/components/PageHeader";
 import { Panel, SectionTitle } from "@/components/ui";
 import { cn } from "@/lib/cn";
@@ -39,7 +40,7 @@ export default function SettingsPage() {
   const [geminiKey, setGeminiKey] = useState("");
   const [geminiModel, setGeminiModel] = useState("gemini-2.5-flash");
   const [groqKey, setGroqKey] = useState("");
-  const [groqModel, setGroqModel] = useState("llama-3.3-70b-versatile");
+  const [groqModel, setGroqModel] = useState(DEFAULT_GROQ_MODEL);
   const [showKey, setShowKey] = useState(false);
   const [chatSaved, setChatSaved] = useState(false);
   const [geminiModels, setGeminiModels] = useState<string[]>([]);
@@ -87,7 +88,7 @@ export default function SettingsPage() {
     setChatSettings({
       provider: chatProvider, geminiKey: "", groqKey: "",
       geminiModel: geminiModel.trim() || "gemini-2.5-flash",
-      groqModel: groqModel.trim() || "llama-3.3-70b-versatile",
+      groqModel: resolveGroqModel(groqModel),
     });
     setGeminiKey(""); setGroqKey("");
     setChatSaved(true); setTimeout(() => setChatSaved(false), 2500);

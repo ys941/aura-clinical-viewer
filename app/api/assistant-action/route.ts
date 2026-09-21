@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { groqReasoningOpts, resolveGroqModel } from "@/lib/groqModels";
 
 export const runtime = "nodejs";
 
@@ -58,10 +59,10 @@ async function agentJson(message: string, body: any): Promise<{ text?: string; e
   if (!use) return { error: "no-key" };
 
   if (use === "groq") {
-    const model = (String(body?.groqModel || "") || process.env.GROQ_MODEL || "llama-3.3-70b-versatile").trim();
+    const model = resolveGroqModel(String(body?.groqModel || "") || process.env.GROQ_MODEL);
     const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${groqKey}` }, signal: AbortSignal.timeout(30000),
-      body: JSON.stringify({ model, temperature: 0.1, response_format: { type: "json_object" }, messages: [{ role: "system", content: AGENT }, { role: "user", content: message }] }),
+      body: JSON.stringify({ model, temperature: 0.1, ...groqReasoningOpts(model), response_format: { type: "json_object" }, messages: [{ role: "system", content: AGENT }, { role: "user", content: message }] }),
     });
     if (!r.ok) return { error: `Groq ${r.status}: ${(await r.text().catch(() => "")).slice(0, 120)}` };
     const d = await r.json();

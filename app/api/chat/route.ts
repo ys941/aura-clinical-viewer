@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { resolveEndpoint } from "@/lib/medgemma";
+import { groqReasoningOpts, resolveGroqModel } from "@/lib/groqModels";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -120,7 +121,7 @@ async function openai(msgs: Msg[]) {
 
 async function groq(msgs: Msg[], keyOverride = "", modelOverride = "") {
   const key = keyOverride || process.env.GROQ_API_KEY?.trim() || "";
-  const model = modelOverride || process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile";
+  const model = resolveGroqModel(modelOverride || process.env.GROQ_MODEL);
   if (!key) return NextResponse.json({ reply: "No Groq API key set. Add it in Settings → AI Assistant (or say “my groq key is …”). Get a free key at console.groq.com/keys." });
   // Groq (Llama) is used for TEXT here — content must be a plain string. Image turns get a note.
   const messages = [{ role: "system", content: SYSTEM }, ...msgs.slice(-8).map((m) => ({
@@ -132,7 +133,7 @@ async function groq(msgs: Msg[], keyOverride = "", modelOverride = "") {
   try {
     const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, signal: controller.signal,
-      body: JSON.stringify({ model, messages, max_tokens: 800, temperature: 0.3, stream: false }),
+      body: JSON.stringify({ model, messages, max_tokens: 800, temperature: 0.3, stream: false, ...groqReasoningOpts(model) }),
     });
     if (!r.ok) { const t = await r.text().catch(() => ""); return NextResponse.json({ reply: `Groq error ${r.status}. ${t.slice(0, 180)}` }); }
     const data = await r.json();
